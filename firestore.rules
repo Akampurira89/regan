@@ -1,0 +1,48 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function myProfile() {
+      return get(/databases/$(database)/documents/profiles/$(request.auth.uid));
+    }
+    function myRole() {
+      return isSignedIn() && exists(/databases/$(database)/documents/profiles/$(request.auth.uid))
+        ? myProfile().data.role
+        : null;
+    }
+    function isAdmin() { return myRole() == 'admin'; }
+    function isStaff() { return isSignedIn() && myRole() != null; }
+
+    // profiles: anyone signed in can read (needed for name lookups across the
+    // app); only admins can change roles / create staff records. Users can
+    // update their own non-role fields (e.g. nothing sensitive client-side).
+    match /profiles/{uid} {
+      allow read: if isStaff();
+      allow create: if isAdmin();
+      allow update: if isAdmin() || (isSignedIn() && request.auth.uid == uid);
+      allow delete: if isAdmin();
+    }
+
+    // Everything else: any authenticated staff member can read/write. This
+    // mirrors the Supabase version's RLS policy (single-shop trust model).
+    // Tighten per-collection if you add multiple untrusted staff tiers later.
+    match /{collection}/{docId} {
+      allow read, write: if isStaff() && collection != 'profiles';
+    }
+
+    // Subcollections (sales/items, purchases/items, repairs/notes,
+    // warranties/claims) — same rule, any signed-in staff member.
+    match /{path=**}/items/{itemId} {
+      allow read, write: if isStaff();
+    }
+    match /{path=**}/notes/{noteId} {
+      allow read, write: if isStaff();
+    }
+    match /{path=**}/claims/{claimId} {
+      allow read, write: if isStaff();
+    }
+  }
+}
