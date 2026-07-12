@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-brand: #c2410c;
+  --color-brand-dark: #9a3412;
+  --color-brand-light: #fb923c;
+}
+
+:root {
+  --brand: #c2410c;
+  --bg: #f4f6f9;
+}
+
+html, body, #root { height: 100%; }
+body {
+  background: var(--bg);
+  color: #111827;
+}
+.dark body { background: #0b1220; color: #e5e7eb; }
+
+/* ---------- Screen: hide printable receipt ---------- */
+.receipt-print-area { display: none; }
+
+/* ---------- Print mode ---------- */
+@media print {
+  body * { visibility: hidden; }
+  .receipt-print-area, .receipt-print-area * { visibility: visible; }
+  .receipt-print-area {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+  }
+  .no-print { display: none !important; }
+  @page { margin: 4mm; }
+}
+
+.receipt-80mm { width: 80mm; font-size: 11px; }
+.receipt-58mm { width: 58mm; font-size: 9px; }
+.receipt-a5 { width: 148mm; font-size: 13px; }
+.receipt-a4 { width: 210mm; font-size: 14px; }
+
+.receipt-80mm, .receipt-58mm, .receipt-a5, .receipt-a4 {
+  box-sizing: border-box;
+  overflow-wrap: break-word;
+}
+.receipt-80mm table, .receipt-58mm table, .receipt-a5 table, .receipt-a4 table {
+  table-layout: fixed;
+  width: 100%;
+}
+.receipt-80mm td, .receipt-80mm th,
+.receipt-58mm td, .receipt-58mm th,
+.receipt-a5 td, .receipt-a5 th,
+.receipt-a4 td, .receipt-a4 th {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  vertical-align: top;
+}
+.receipt-num-col { white-space: nowrap; }
+
+@media print {
+  .receipt-80mm, .receipt-58mm, .receipt-a5, .receipt-a4 { width: 100% !important; max-width: 100%; }
+}
+
+.scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
