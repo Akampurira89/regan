@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { DollarSign, Package, AlertTriangle, Wallet, TrendingUp, HandCoins, MessageCircle, X } from 'lucide-react'
 import { collection, getDocs, query, where, orderBy, limit, Timestamp } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { StatCard, Card, Badge, EmptyState, Button } from '../components/ui/ui'
 import { formatMoney, formatDate } from '../utils/helpers'
 import { useSettings } from '../context/SettingsContext'
@@ -26,12 +26,12 @@ export default function Dashboard() {
       const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0)
 
       const [salesSnap, productsSnap, debtsSnap, recentSnap, customersSnap, consignSnap] = await Promise.all([
-        getDocs(query(collection(db, 'sales'), where('created_at', '>=', Timestamp.fromDate(startOfDay)))),
-        getDocs(collection(db, 'products')),
-        getDocs(query(collection(db, 'debts'), where('status', '!=', 'paid'))),
-        getDocs(query(collection(db, 'sales'), orderBy('created_at', 'desc'), limit(6))),
-        getDocs(collection(db, 'customers')),
-        getDocs(query(collection(db, 'consignmentItems'), where('status', '==', 'sold'))),
+        getDocs(query(collection(db, ...tPath('sales')), where('created_at', '>=', Timestamp.fromDate(startOfDay)))),
+        getDocs(collection(db, ...tPath('products'))),
+        getDocs(query(collection(db, ...tPath('debts')), where('status', '!=', 'paid'))),
+        getDocs(query(collection(db, ...tPath('sales')), orderBy('created_at', 'desc'), limit(6))),
+        getDocs(collection(db, ...tPath('customers'))),
+        getDocs(query(collection(db, ...tPath('consignmentItems')), where('status', '==', 'sold'))),
       ])
 
       const todaySalesDocs = salesSnap.docs.map((d) => d.data())
