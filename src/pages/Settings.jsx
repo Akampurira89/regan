@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Plus, UserMinus, Wallet, History } from 'lucide-react'
 import { collection, getDocs, addDoc, updateDoc, doc, runTransaction, serverTimestamp, query, where } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { Card, Input, Select, Checkbox, Button, Modal, EmptyState, Badge, Textarea } from '../components/ui/ui'
 import { useSettings } from '../context/SettingsContext'
 import { formatMoney, formatDate, logAudit } from '../utils/helpers'
@@ -26,12 +26,12 @@ export default function Settings() {
 
   const viewPayableHistory = async (payable) => {
     setHistoryFor(payable)
-    const snap = await getDocs(query(collection(db, 'payments'), where('reference_type', '==', 'personal_payable'), where('reference_id', '==', payable.id)))
+    const snap = await getDocs(query(collection(db, ...tPath('payments')), where('reference_type', '==', 'personal_payable'), where('reference_id', '==', payable.id)))
     setPayableHistory(snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0)))
   }
 
   const loadPayables = async () => {
-    const snap = await getDocs(collection(db, 'personalPayables'))
+    const snap = await getDocs(collection(db, ...tPath('personalPayables')))
     setPayables(snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((p) => p.balance > 0).sort((a, b) => (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0)))
   }
   useEffect(() => { loadPayables() }, [])
@@ -41,7 +41,7 @@ export default function Settings() {
     const amount = Number(payableForm.amount)
     if (!amount) return
     const payload = { person_name: payableForm.person_name, phone: payableForm.phone, reason: payableForm.reason, original_amount: amount, balance: amount, created_at: serverTimestamp() }
-    const ref = await addDoc(collection(db, 'personalPayables'), payload)
+    const ref = await addDoc(collection(db, ...tPath('personalPayables')), payload)
     await logAudit({ userId: profile?.id, action: 'create', entityType: 'personalPayables', entityId: ref.id, newValues: payload })
     setPayableModalOpen(false); setPayableForm({ person_name: '', phone: '', amount: '', reason: '' })
     loadPayables()
@@ -53,14 +53,14 @@ export default function Settings() {
     if (!amount || amount <= 0) return
     try {
       await runTransaction(db, async (tx) => {
-        const ref = doc(db, 'personalPayables', payModal.id)
+        const ref = doc(db, ...tPath('personalPayables', payModal.id))
         const snap = await tx.get(ref)
         const currentBalance = snap.data()?.balance || 0
         tx.update(ref, { balance: Math.max(0, currentBalance - amount) })
       })
       // Kept separate from the 'expenses' collection on purpose — this is a personal debt
       // repayment, not a business expense category, so it won't skew your expense reports.
-      await addDoc(collection(db, 'payments'), { reference_type: 'personal_payable', reference_id: payModal.id, amount, method: 'cash', received_by: profile?.id, created_at: serverTimestamp() })
+      await addDoc(collection(db, ...tPath('payments')), { reference_type: 'personal_payable', reference_id: payModal.id, amount, method: 'cash', received_by: profile?.id, created_at: serverTimestamp() })
       await logAudit({ userId: profile?.id, action: 'payment', entityType: 'personalPayables', entityId: payModal.id, newValues: { amount } })
       setPayModal(null); setPayAmount('')
       loadPayables()
@@ -72,7 +72,7 @@ export default function Settings() {
   useEffect(() => { setForm(company) }, [company])
 
   const loadExpenses = async () => {
-    const [eSnap, cSnap] = await Promise.all([getDocs(collection(db, 'expenses')), getDocs(collection(db, 'expenseCategories'))])
+    const [eSnap, cSnap] = await Promise.all([getDocs(collection(db, ...tPath('expenses'))), getDocs(collection(db, ...tPath('expenseCategories')))])
     const catMap = Object.fromEntries(cSnap.docs.map((d) => [d.id, d.data().name]))
     setExpenses(eSnap.docs.map((d) => ({ id: d.id, ...d.data(), categoryName: catMap[d.data().category_id] })).sort((a, b) => (b.expense_date || '').localeCompare(a.expense_date || '')).slice(0, 20))
     setExpenseCategories(cSnap.docs.map((d) => ({ id: d.id, ...d.data() })))
@@ -87,7 +87,7 @@ export default function Settings() {
 
   const saveExpense = async (e) => {
     e.preventDefault()
-    const ref = await addDoc(collection(db, 'expenses'), { ...expForm, amount: Number(expForm.amount), paid_by: profile?.id, created_at: serverTimestamp() })
+    const ref = await addDoc(collection(db, ...tPath('expenses')), { ...expForm, amount: Number(expForm.amount), paid_by: profile?.id, created_at: serverTimestamp() })
     await logAudit({ userId: profile?.id, action: 'create', entityType: 'expenses', entityId: ref.id, newValues: expForm })
     setExpModal(false)
     setExpForm({ category_id: '', amount: '', description: '', expense_date: new Date().toISOString().slice(0, 10) })
