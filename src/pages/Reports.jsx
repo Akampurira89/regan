@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, LineChart, Line } from 'recharts'
 import { collection, getDocs, query, where, Timestamp } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { Card, Select, Input, Button, StatCard, EmptyState } from '../components/ui/ui'
 import { formatMoney, exportToCSV } from '../utils/helpers'
 import { useSettings } from '../context/SettingsContext'
@@ -34,7 +34,7 @@ const weekKey = (d) => {
 const monthKey = (d) => (d?.toDate ? d.toDate() : new Date(d)).toISOString().slice(0, 7)
 
 async function loadPeriodFinancials(start, end) {
-  const salesSnap = await getDocs(query(collection(db, 'sales'), where('created_at', '>=', Timestamp.fromDate(start)), where('created_at', '<=', Timestamp.fromDate(end))))
+  const salesSnap = await getDocs(query(collection(db, ...tPath('sales')), where('created_at', '>=', Timestamp.fromDate(start)), where('created_at', '<=', Timestamp.fromDate(end))))
   const salesData = salesSnap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((s) => s.status !== 'void')
   const revenue = salesData.reduce((sum, s) => sum + Number(s.total), 0)
 
@@ -42,7 +42,7 @@ async function loadPeriodFinancials(start, end) {
   let saleItems = []
   let salesWithItems = salesData
   if (salesData.length > 0) {
-    const itemsArrays = await Promise.all(salesData.map((s) => getDocs(collection(db, 'sales', s.id, 'items'))))
+    const itemsArrays = await Promise.all(salesData.map((s) => getDocs(collection(db, ...tPath('sales', s.id, 'items')))))
     salesWithItems = salesData.map((s, idx) => ({ ...s, items: itemsArrays[idx].docs.map((d) => d.data()) }))
     saleItems = salesWithItems.flatMap((s) => s.items)
     cogs = saleItems.reduce((sum, i) => sum + Number(i.cost_price) * Number(i.qty), 0)
@@ -79,14 +79,14 @@ export default function Reports() {
     const [curr, prevData, expSnap, expCatSnap, prodSnap, paymentsSnap, debtsSnap, suppliersSnap, customersSnap, profilesSnap] = await Promise.all([
       loadPeriodFinancials(start, end),
       loadPeriodFinancials(prev.start, prev.end),
-      getDocs(collection(db, 'expenses')),
-      getDocs(collection(db, 'expenseCategories')),
-      getDocs(collection(db, 'products')),
-      getDocs(collection(db, 'payments')),
-      getDocs(query(collection(db, 'debts'), where('status', '!=', 'paid'))),
-      getDocs(collection(db, 'suppliers')),
-      getDocs(collection(db, 'customers')),
-      getDocs(collection(db, 'profiles')),
+      getDocs(collection(db, ...tPath('expenses'))),
+      getDocs(collection(db, ...tPath('expenseCategories'))),
+      getDocs(collection(db, ...tPath('products'))),
+      getDocs(collection(db, ...tPath('payments'))),
+      getDocs(query(collection(db, ...tPath('debts')), where('status', '!=', 'paid'))),
+      getDocs(collection(db, ...tPath('suppliers'))),
+      getDocs(collection(db, ...tPath('customers'))),
+      getDocs(collection(db, ...tPath('profiles'))),
     ])
     setCurrent(curr)
     setPrevious(prevData)
@@ -112,7 +112,7 @@ export default function Reports() {
 
     // Separate 180-day lookback (independent of the preset above) to find record days/weeks/months
     const lookbackStart = new Date(); lookbackStart.setDate(lookbackStart.getDate() - 180)
-    const lookbackSnap = await getDocs(query(collection(db, 'sales'), where('created_at', '>=', Timestamp.fromDate(lookbackStart))))
+    const lookbackSnap = await getDocs(query(collection(db, ...tPath('sales')), where('created_at', '>=', Timestamp.fromDate(lookbackStart))))
     const lookbackSales = lookbackSnap.docs.map((d) => d.data()).filter((s) => s.status !== 'void')
 
     const byDay = {}, byWeek = {}, byMonth = {}
