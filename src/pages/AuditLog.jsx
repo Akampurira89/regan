@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { collection, getDocs, orderBy, query, limit } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { Card, Badge, Select, EmptyState } from '../components/ui/ui'
 import { formatDate } from '../utils/helpers'
 
@@ -14,8 +14,8 @@ export default function AuditLog() {
   useEffect(() => {
     (async () => {
       const [logSnap, profileSnap] = await Promise.all([
-        getDocs(query(collection(db, 'auditLogs'), orderBy('created_at', 'desc'), limit(300))),
-        getDocs(collection(db, 'profiles')),
+        getDocs(query(collection(db, ...tPath('auditLogs')), orderBy('created_at', 'desc'), limit(300))),
+        getDocs(collection(db, ...tPath('profiles'))),
       ])
       const profileMap = Object.fromEntries(profileSnap.docs.map((d) => [d.id, d.data().full_name]))
       setLogs(logSnap.docs.map((d) => ({ id: d.id, ...d.data(), userName: profileMap[d.data().user_id] })))
