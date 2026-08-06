@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react'
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth'
 import { doc, getDoc, addDoc, collection, serverTimestamp } from 'firebase/firestore'
-import { auth, db } from '../lib/firebase'
+import { auth, db, tPath } from '../lib/firebase'
 
 const AuthContext = createContext(null)
 
@@ -22,7 +22,7 @@ export function AuthProvider({ children }) {
 
   const loadProfile = useCallback(async (uid) => {
     if (!uid) { setProfile(null); return }
-    const snap = await getDoc(doc(db, 'profiles', uid))
+    const snap = await getDoc(doc(db, ...tPath('profiles', uid)))
     setProfile(snap.exists() ? { id: snap.id, ...snap.data() } : null)
   }, [])
 
@@ -37,7 +37,7 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const cred = await signInWithEmailAndPassword(auth, email, password)
-    await addDoc(collection(db, 'loginHistory'), {
+    await addDoc(collection(db, ...tPath('loginHistory')), {
       user_id: cred.user.uid,
       device_info: navigator.userAgent,
       logged_in_at: serverTimestamp(),
