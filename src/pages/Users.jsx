@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Plus } from 'lucide-react'
 import { collection, getDocs, updateDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { createStaffAuthAccount } from '../lib/createStaffAccount'
 import { Card, Badge, EmptyState, Button, Modal, Input, Select } from '../components/ui/ui'
 import { formatDate, logAudit } from '../utils/helpers'
@@ -20,20 +20,20 @@ export default function Users() {
 
   const load = async () => {
     setLoading(true)
-    const snap = await getDocs(collection(db, 'profiles'))
+    const snap = await getDocs(collection(db, ...tPath('profiles')))
     setStaff(snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0)))
     setLoading(false)
   }
   useEffect(() => { load() }, [])
 
   const changeRole = async (user, role) => {
-    await updateDoc(doc(db, 'profiles', user.id), { role })
+    await updateDoc(doc(db, ...tPath('profiles', user.id)), { role })
     await logAudit({ userId: profile?.id, action: 'update', entityType: 'profiles', entityId: user.id, newValues: { role } })
     load()
   }
 
   const toggleActive = async (user) => {
-    await updateDoc(doc(db, 'profiles', user.id), { is_active: !user.is_active })
+    await updateDoc(doc(db, ...tPath('profiles', user.id)), { is_active: !user.is_active })
     await logAudit({ userId: profile?.id, action: 'update', entityType: 'profiles', entityId: user.id, newValues: { is_active: !user.is_active } })
     load()
   }
@@ -45,7 +45,7 @@ export default function Users() {
     setSaving(true)
     try {
       const uid = await createStaffAuthAccount(form.email, form.password)
-      await setDoc(doc(db, 'profiles', uid), {
+      await setDoc(doc(db, ...tPath('profiles', uid)), {
         full_name: form.full_name, role: form.role, phone: form.phone, is_active: true, created_at: serverTimestamp(),
       })
       await logAudit({ userId: profile?.id, action: 'create', entityType: 'profiles', entityId: uid, newValues: { full_name: form.full_name, role: form.role } })
