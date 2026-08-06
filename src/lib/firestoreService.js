@@ -3,10 +3,10 @@ import {
   query, where, orderBy, limit as qLimit, onSnapshot, serverTimestamp, increment,
   writeBatch, runTransaction,
 } from 'firebase/firestore'
-import { db } from './firebase'
+import { db, tPath } from './firebase'
 
-export const col = (name) => collection(db, name)
-export const docRef = (name, id) => doc(db, name, id)
+export const col = (name) => collection(db, ...tPath(name))
+export const docRef = (name, id) => doc(db, ...tPath(name, id))
 
 export async function getAllDocs(name, constraints = []) {
   const q = query(col(name), ...constraints)
