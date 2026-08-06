@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Plus, Trash2, Pencil } from 'lucide-react'
 import { collection, getDocs, doc, deleteDoc, runTransaction, serverTimestamp } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { Button, Card, Input, Select, Modal, EmptyState, Badge } from '../components/ui/ui'
 import { formatMoney, formatDate, logAudit } from '../utils/helpers'
 import { useAuth } from '../context/AuthContext'
@@ -26,7 +26,7 @@ export default function Purchases() {
   const load = async () => {
     setLoading(true)
     const [pSnap, sSnap, prodSnap] = await Promise.all([
-      getDocs(collection(db, 'purchases')), getDocs(collection(db, 'suppliers')), getDocs(collection(db, 'products')),
+      getDocs(collection(db, ...tPath('purchases'))), getDocs(collection(db, ...tPath('suppliers'))), getDocs(collection(db, ...tPath('products'))),
     ])
     const supplierMap = Object.fromEntries(sSnap.docs.map((d) => [d.id, d.data().name]))
     setPurchases(pSnap.docs.map((d) => ({ id: d.id, ...d.data(), supplierName: supplierMap[d.data().supplier_id] })).sort((a, b) => (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0)))
@@ -48,7 +48,7 @@ export default function Purchases() {
   }
 
   const openEdit = async (purchase) => {
-    const itemsSnap = await getDocs(collection(db, 'purchases', purchase.id, 'items'))
+    const itemsSnap = await getDocs(collection(db, ...tPath('purchases', purchase.id, 'items')))
     const existing = itemsSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
     setEditing(purchase)
     setOriginalItems(existing)
@@ -72,9 +72,9 @@ export default function Purchases() {
         // and adjust the supplier balance by the difference — all in one transaction
         // so stock and supplier balances never drift out of sync.
         const productIds = [...new Set([...originalItems.map((i) => i.product_id), ...valid.map((i) => i.product_id)])]
-        const productRefs = productIds.map((id) => doc(db, 'products', id))
-        const supplierRef = doc(db, 'suppliers', supplierId)
-        const purchaseRef = doc(db, 'purchases', editing.id)
+        const productRefs = productIds.map((id) => doc(db, ...tPath('products', id)))
+        const supplierRef = doc(db, ...tPath('suppliers', supplierId))
+        const purchaseRef = doc(db, ...tPath('purchases', editing.id))
 
         await runTransaction(db, async (tx) => {
           const productSnaps = await Promise.all(productRefs.map((r) => tx.get(r)))
@@ -86,9 +86,9 @@ export default function Purchases() {
           valid.forEach((i) => { stockMap[i.product_id] += Number(i.qty) })
 
           productIds.forEach((id, idx) => tx.update(productRefs[idx], { stock_qty: stockMap[id] }))
-          originalItems.forEach((i) => tx.delete(doc(db, 'purchases', editing.id, 'items', i.id)))
+          originalItems.forEach((i) => tx.delete(doc(db, ...tPath('purchases', editing.id, 'items', i.id))))
           valid.forEach((i) => {
-            const ref = doc(collection(db, 'purchases', editing.id, 'items'))
+            const ref = doc(collection(db, ...tPath('purchases', editing.id, 'items')))
             tx.set(ref, { product_id: i.product_id, qty: Number(i.qty), cost_price: Number(i.cost_price), amount: Number(i.qty) * Number(i.cost_price) })
           })
 
@@ -103,10 +103,10 @@ export default function Purchases() {
         await logAudit({ userId: profile?.id, action: 'update', entityType: 'purchases', entityId: editing.id, newValues: { total } })
       } else {
         // NEW purchase
-        const purchaseRef = doc(collection(db, 'purchases'))
+        const purchaseRef = doc(collection(db, ...tPath('purchases')))
         await runTransaction(db, async (tx) => {
-          const productRefs = valid.map((i) => doc(db, 'products', i.product_id))
-          const supplierRef = doc(db, 'suppliers', supplierId)
+          const productRefs = valid.map((i) => doc(db, ...tPath('products', i.product_id)))
+          const supplierRef = doc(db, ...tPath('suppliers', supplierId))
           const [productSnaps, supplierSnap] = await Promise.all([
             Promise.all(productRefs.map((r) => tx.get(r))),
             tx.get(supplierRef),
@@ -117,11 +117,11 @@ export default function Purchases() {
             created_by: profile?.id, created_at: serverTimestamp(),
           })
           valid.forEach((i, idx) => {
-            const itemRef = doc(collection(db, 'purchases', purchaseRef.id, 'items'))
+            const itemRef = doc(collection(db, ...tPath('purchases', purchaseRef.id, 'items')))
             tx.set(itemRef, { product_id: i.product_id, qty: Number(i.qty), cost_price: Number(i.cost_price), amount: Number(i.qty) * Number(i.cost_price) })
             const currentStock = productSnaps[idx].exists() ? (productSnaps[idx].data().stock_qty || 0) : 0
             tx.update(productRefs[idx], { stock_qty: currentStock + Number(i.qty) })
-            const movementRef = doc(collection(db, 'stockMovements'))
+            const movementRef = doc(collection(db, ...tPath('stockMovements')))
             tx.set(movementRef, { product_id: i.product_id, change_qty: Number(i.qty), reason: 'purchase', reference_id: purchaseRef.id, created_at: serverTimestamp() })
           })
           if (total - paid > 0) {
@@ -144,10 +144,10 @@ export default function Purchases() {
   const remove = async (purchase) => {
     if (!confirm(`Delete this purchase from ${purchase.supplierName}? This removes the stock it added and reverses the supplier balance. This cannot be undone.`)) return
     try {
-      const itemsSnap = await getDocs(collection(db, 'purchases', purchase.id, 'items'))
+      const itemsSnap = await getDocs(collection(db, ...tPath('purchases', purchase.id, 'items')))
       const purchaseItems = itemsSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
-      const productRefs = purchaseItems.map((i) => doc(db, 'products', i.product_id))
-      const supplierRef = doc(db, 'suppliers', purchase.supplier_id)
+      const productRefs = purchaseItems.map((i) => doc(db, ...tPath('products', i.product_id)))
+      const supplierRef = doc(db, ...tPath('suppliers', purchase.supplier_id))
 
       await runTransaction(db, async (tx) => {
         const productSnaps = await Promise.all(productRefs.map((r) => tx.get(r)))
@@ -157,12 +157,12 @@ export default function Purchases() {
           if (productSnaps[idx].exists()) {
             tx.update(productRefs[idx], { stock_qty: Math.max(0, (productSnaps[idx].data().stock_qty || 0) - i.qty) })
           }
-          tx.delete(doc(db, 'purchases', purchase.id, 'items', i.id))
+          tx.delete(doc(db, ...tPath('purchases', purchase.id, 'items', i.id)))
         })
         if (purchase.balance_due > 0 && supplierSnap.exists()) {
           tx.update(supplierRef, { balance_owed: Math.max(0, (supplierSnap.data().balance_owed || 0) - purchase.balance_due) })
         }
-        tx.delete(doc(db, 'purchases', purchase.id))
+        tx.delete(doc(db, ...tPath('purchases', purchase.id)))
       })
       await logAudit({ userId: profile?.id, action: 'delete', entityType: 'purchases', entityId: purchase.id, oldValues: purchase })
       load()
