@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Search, Plus, Minus, Trash2, ShoppingCart, X, ScanLine, ClipboardCheck } from 'lucide-react'
 import { collection, getDocs, addDoc, doc, updateDoc, increment, runTransaction, serverTimestamp } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { Button, Card, Input, Select, Modal, Badge } from '../components/ui/ui'
 import BarcodeScannerModal from '../components/ui/BarcodeScannerModal'
 import { formatMoney, generateSequenceNumber, logAudit } from '../utils/helpers'
@@ -32,7 +32,7 @@ export default function Sales() {
   const [redeemPoints, setRedeemPoints] = useState('0')
 
   const load = async () => {
-    const [pSnap, cSnap] = await Promise.all([getDocs(collection(db, 'products')), getDocs(collection(db, 'customers'))])
+    const [pSnap, cSnap] = await Promise.all([getDocs(collection(db, ...tPath('products'))), getDocs(collection(db, ...tPath('customers')))])
     setProducts(pSnap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((p) => p.is_active !== false))
     setCustomers(cSnap.docs.map((d) => ({ id: d.id, ...d.data() })))
   }
@@ -102,7 +102,7 @@ export default function Sales() {
       let finalCustomerId = customerId || null
       let finalCustomer = customers.find((c) => c.id === customerId) || null
       if (isNewCustomer) {
-        const custRef = await addDoc(collection(db, 'customers'), { name: newCustomerName.trim(), phone: newCustomerPhone.trim(), loyalty_points: 0, created_at: serverTimestamp() })
+        const custRef = await addDoc(collection(db, ...tPath('customers')), { name: newCustomerName.trim(), phone: newCustomerPhone.trim(), loyalty_points: 0, created_at: serverTimestamp() })
         finalCustomerId = custRef.id
         finalCustomer = { id: custRef.id, name: newCustomerName.trim(), phone: newCustomerPhone.trim() }
       }
@@ -116,9 +116,9 @@ export default function Sales() {
         created_at: serverTimestamp(),
       }
 
-      const saleRef = doc(collection(db, 'sales'))
+      const saleRef = doc(collection(db, ...tPath('sales')))
       await runTransaction(db, async (tx) => {
-        const productRefs = cart.map((i) => doc(db, 'products', i.product.id))
+        const productRefs = cart.map((i) => doc(db, ...tPath('products', i.product.id)))
         const productSnaps = await Promise.all(productRefs.map((r) => tx.get(r)))
         productSnaps.forEach((snap, idx) => {
           const current = snap.data()?.stock_qty ?? 0
@@ -127,18 +127,18 @@ export default function Sales() {
 
         tx.set(saleRef, saleData)
         cart.forEach((i, idx) => {
-          const itemRef = doc(collection(db, 'sales', saleRef.id, 'items'))
+          const itemRef = doc(collection(db, ...tPath('sales', saleRef.id, 'items')))
           tx.set(itemRef, {
             product_id: i.product.id, product_name: i.product.name, serial_number: i.serial || null,
             qty: i.qty, rate: i.rate, amount: i.rate * i.qty, cost_price: i.product.buying_price,
           })
           tx.update(productRefs[idx], { stock_qty: productSnaps[idx].data().stock_qty - i.qty })
-          const movementRef = doc(collection(db, 'stockMovements'))
+          const movementRef = doc(collection(db, ...tPath('stockMovements')))
           tx.set(movementRef, { product_id: i.product.id, change_qty: -i.qty, reason: 'sale', reference_id: saleRef.id, created_at: serverTimestamp() })
         })
 
         if (saleData.is_credit_sale) {
-          const debtRef = doc(collection(db, 'debts'))
+          const debtRef = doc(collection(db, ...tPath('debts')))
           tx.set(debtRef, {
             sale_id: saleRef.id, customer_id: finalCustomerId, original_amount: total,
             amount_paid: paid, balance: balanceDue, status: 'open', created_at: serverTimestamp(),
@@ -147,7 +147,7 @@ export default function Sales() {
       })
 
       if (paid > 0) {
-        await addDoc(collection(db, 'payments'), { reference_type: 'sale', reference_id: saleRef.id, amount: paid, method: paymentMethod, received_by: profile?.id, created_at: serverTimestamp() })
+        await addDoc(collection(db, ...tPath('payments')), { reference_type: 'sale', reference_id: saleRef.id, amount: paid, method: paymentMethod, received_by: profile?.id, created_at: serverTimestamp() })
       }
       await logAudit({ userId: profile?.id, action: 'create', entityType: 'sales', entityId: saleRef.id, newValues: { total, receipt_number: receiptNumber } })
 
@@ -157,7 +157,7 @@ export default function Sales() {
         const earned = Math.floor(total / POINTS_EARN_RATE)
         const netChange = earned - redeemed
         if (netChange !== 0) {
-          await updateDoc(doc(db, 'customers', finalCustomerId), { loyalty_points: increment(netChange) })
+          await updateDoc(doc(db, ...tPath('customers', finalCustomerId)), { loyalty_points: increment(netChange) })
         }
       }
 
