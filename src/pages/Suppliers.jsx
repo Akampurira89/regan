@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Plus, Pencil, Wallet, History, ShoppingBag, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, serverTimestamp, runTransaction } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { Button, Card, Input, Textarea, Modal, EmptyState, Badge } from '../components/ui/ui'
 import { formatMoney, formatDate, logAudit } from '../utils/helpers'
 import { useAuth } from '../context/AuthContext'
@@ -25,7 +25,7 @@ export default function Suppliers() {
 
   const load = async () => {
     setLoading(true)
-    const snap = await getDocs(collection(db, 'suppliers'))
+    const snap = await getDocs(collection(db, ...tPath('suppliers')))
     setSuppliers(snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.name || '').localeCompare(b.name || '')))
     setLoading(false)
   }
@@ -39,11 +39,11 @@ export default function Suppliers() {
       alert(`You still owe ${supplier.name} ${formatMoney(supplier.balance_owed, company.currency)}. Settle or clear that balance before deleting them.`)
       return
     }
-    const purchasesSnap = await getDocs(query(collection(db, 'purchases'), where('supplier_id', '==', supplier.id)))
+    const purchasesSnap = await getDocs(query(collection(db, ...tPath('purchases')), where('supplier_id', '==', supplier.id)))
     if (!purchasesSnap.empty) {
       if (!confirm(`${supplier.name} has ${purchasesSnap.size} past purchase record(s). Deleting the supplier keeps those records but removes them from your supplier list. Continue?`)) return
     } else if (!confirm(`Delete supplier "${supplier.name}"?`)) return
-    await deleteDoc(doc(db, 'suppliers', supplier.id))
+    await deleteDoc(doc(db, ...tPath('suppliers', supplier.id)))
     await logAudit({ userId: profile?.id, action: 'delete', entityType: 'suppliers', entityId: supplier.id, oldValues: supplier })
     load()
   }
@@ -51,10 +51,10 @@ export default function Suppliers() {
   const save = async (e) => {
     e.preventDefault()
     if (editing) {
-      await updateDoc(doc(db, 'suppliers', editing.id), form)
+      await updateDoc(doc(db, ...tPath('suppliers', editing.id)), form)
       await logAudit({ userId: profile?.id, action: 'update', entityType: 'suppliers', entityId: editing.id, newValues: form })
     } else {
-      const ref = await addDoc(collection(db, 'suppliers'), { ...form, created_at: serverTimestamp() })
+      const ref = await addDoc(collection(db, ...tPath('suppliers')), { ...form, created_at: serverTimestamp() })
       await logAudit({ userId: profile?.id, action: 'create', entityType: 'suppliers', entityId: ref.id, newValues: form })
     }
     setModalOpen(false)
@@ -68,12 +68,12 @@ export default function Suppliers() {
     const supplier = payModal
     try {
       await runTransaction(db, async (tx) => {
-        const ref = doc(db, 'suppliers', supplier.id)
+        const ref = doc(db, ...tPath('suppliers', supplier.id))
         const snap = await tx.get(ref)
         const currentOwed = snap.data()?.balance_owed || 0
         tx.update(ref, { balance_owed: Math.max(0, currentOwed - amount) })
       })
-      await addDoc(collection(db, 'payments'), { reference_type: 'supplier', reference_id: supplier.id, amount, method: 'cash', received_by: profile?.id, created_at: serverTimestamp() })
+      await addDoc(collection(db, ...tPath('payments')), { reference_type: 'supplier', reference_id: supplier.id, amount, method: 'cash', received_by: profile?.id, created_at: serverTimestamp() })
       await logAudit({ userId: profile?.id, action: 'payment', entityType: 'suppliers', entityId: supplier.id, newValues: { amount } })
       setPayModal(null); setPayAmount('')
       load()
@@ -85,8 +85,8 @@ export default function Suppliers() {
   const viewHistory = async (supplier) => {
     setHistoryFor(supplier)
     const [purchasesSnap, paymentsSnap] = await Promise.all([
-      getDocs(query(collection(db, 'purchases'), where('supplier_id', '==', supplier.id))),
-      getDocs(query(collection(db, 'payments'), where('reference_type', '==', 'supplier'), where('reference_id', '==', supplier.id))),
+      getDocs(query(collection(db, ...tPath('purchases')), where('supplier_id', '==', supplier.id))),
+      getDocs(query(collection(db, ...tPath('payments')), where('reference_type', '==', 'supplier'), where('reference_id', '==', supplier.id))),
     ])
     const purchases = purchasesSnap.docs.map((d) => ({ id: d.id, type: 'purchase', ...d.data() }))
     const payments = paymentsSnap.docs.map((d) => ({ id: d.id, type: 'payment', ...d.data() }))
