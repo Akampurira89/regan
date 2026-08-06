@@ -1,6 +1,6 @@
 import { Download } from 'lucide-react'
 import { collection, getDocs } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { Card, Button } from '../components/ui/ui'
 import { exportToCSV } from '../utils/helpers'
 
@@ -22,7 +22,7 @@ const EXPORTS = [
 
 export default function BackupExport() {
   const runExport = async (name) => {
-    const snap = await getDocs(collection(db, name))
+    const snap = await getDocs(collection(db, ...tPath(name)))
     const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
     if (rows.length === 0) { alert('No data to export for this collection.'); return }
     exportToCSV(`${name}_backup_${new Date().toISOString().slice(0, 10)}.csv`, rows)
