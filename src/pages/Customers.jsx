@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Plus, Search, Eye, Pencil, MessageCircle } from 'lucide-react'
 import { collection, getDocs, addDoc, updateDoc, doc, query, where, serverTimestamp } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { Button, Card, Input, Textarea, Modal, EmptyState, Badge } from '../components/ui/ui'
 import { formatMoney, formatDate, logAudit } from '../utils/helpers'
 import { openWhatsApp } from '../utils/notifications'
@@ -24,7 +24,7 @@ export default function Customers() {
 
   const load = async () => {
     setLoading(true)
-    const snap = await getDocs(collection(db, 'customers'))
+    const snap = await getDocs(collection(db, ...tPath('customers')))
     setCustomers(snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.name || '').localeCompare(b.name || '')))
     setLoading(false)
   }
@@ -38,10 +38,10 @@ export default function Customers() {
   const save = async (e) => {
     e.preventDefault()
     if (editing) {
-      await updateDoc(doc(db, 'customers', editing.id), form)
+      await updateDoc(doc(db, ...tPath('customers', editing.id)), form)
       await logAudit({ userId: profile?.id, action: 'update', entityType: 'customers', entityId: editing.id, newValues: form })
     } else {
-      const ref = await addDoc(collection(db, 'customers'), { ...form, loyalty_points: 0, created_at: serverTimestamp() })
+      const ref = await addDoc(collection(db, ...tPath('customers')), { ...form, loyalty_points: 0, created_at: serverTimestamp() })
       await logAudit({ userId: profile?.id, action: 'create', entityType: 'customers', entityId: ref.id, newValues: form })
     }
     setModalOpen(false)
@@ -50,7 +50,7 @@ export default function Customers() {
 
   const viewHistory = async (c) => {
     setHistoryFor(c)
-    const snap = await getDocs(query(collection(db, 'sales'), where('customer_id', '==', c.id)))
+    const snap = await getDocs(query(collection(db, ...tPath('sales')), where('customer_id', '==', c.id)))
     setHistory(snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0)))
   }
 
