@@ -25,3 +25,14 @@ export const db = initializeFirestore(app, {
 })
 
 export const auth = getAuth(app)
+
+// ---- Multi-tenant support ----
+// TENANT_ID identifies which shop's data this deployment reads/writes.
+// Eddy K Electronics (your own shop) uses 'eddyk-main'. Future clients you
+// onboard will each get their own tenant id here (or loaded dynamically later).
+export const TENANT_ID = 'eddyk-main'
+
+// tPath('products') -> ['tenants', 'eddyk-main', 'products']
+// tPath('sales', saleId, 'items') -> ['tenants', 'eddyk-main', 'sales', saleId, 'items']
+// Use it like: collection(db, ...tPath('products'))  or  doc(db, ...tPath('products', id))
+export const tPath = (...segments) => ['tenants', TENANT_ID, ...segments]
