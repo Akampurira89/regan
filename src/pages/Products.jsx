@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Plus, Search, Pencil, Trash2, Download, PackagePlus, ScanLine, Tags, X } from 'lucide-react'
 import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { Button, Card, Input, Select, Modal, Badge, EmptyState, Checkbox } from '../components/ui/ui'
 import BarcodeScannerModal from '../components/ui/BarcodeScannerModal'
 import { formatMoney, exportToCSV, logAudit } from '../utils/helpers'
@@ -34,7 +34,7 @@ export default function Products() {
 
   const load = async () => {
     setLoading(true)
-    const [pSnap, cSnap] = await Promise.all([getDocs(collection(db, 'products')), getDocs(collection(db, 'categories'))])
+    const [pSnap, cSnap] = await Promise.all([getDocs(collection(db, ...tPath('products'))), getDocs(collection(db, ...tPath('categories')))])
     const cats = cSnap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (a.name || '').localeCompare(b.name || ''))
     const catMap = Object.fromEntries(cats.map((c) => [c.id, c.name]))
     setProducts(pSnap.docs.map((d) => ({ id: d.id, ...d.data(), categoryName: catMap[d.data().category_id] })).sort((a, b) => (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0)))
@@ -71,11 +71,11 @@ export default function Products() {
       unit: form.unit, is_active: form.is_active, negotiable: form.negotiable,
     }
     if (editing) {
-      await updateDoc(doc(db, 'products', editing.id), { ...payload, updated_at: serverTimestamp() })
+      await updateDoc(doc(db, ...tPath('products', editing.id)), { ...payload, updated_at: serverTimestamp() })
       await logAudit({ userId: profile?.id, action: 'update', entityType: 'products', entityId: editing.id, newValues: payload })
     } else {
       payload.stock_qty = Number(form.stock_qty) || 0
-      const ref = await addDoc(collection(db, 'products'), { ...payload, updated_at: serverTimestamp() })
+      const ref = await addDoc(collection(db, ...tPath('products')), { ...payload, updated_at: serverTimestamp() })
       await logAudit({ userId: profile?.id, action: 'create', entityType: 'products', entityId: ref.id, newValues: payload })
     }
     setModalOpen(false)
@@ -84,7 +84,7 @@ export default function Products() {
 
   const remove = async (p) => {
     if (!confirm(`Delete "${p.name}"? This cannot be undone.`)) return
-    await deleteDoc(doc(db, 'products', p.id))
+    await deleteDoc(doc(db, ...tPath('products', p.id)))
     await logAudit({ userId: profile?.id, action: 'delete', entityType: 'products', entityId: p.id, oldValues: p })
     load()
   }
@@ -94,8 +94,8 @@ export default function Products() {
     const qty = Number(adjustQty)
     if (!qty) return
     const product = adjustModal
-    await updateDoc(doc(db, 'products', product.id), { stock_qty: product.stock_qty + qty })
-    await addDoc(collection(db, 'stockMovements'), {
+    await updateDoc(doc(db, ...tPath('products', product.id)), { stock_qty: product.stock_qty + qty })
+    await addDoc(collection(db, ...tPath('stockMovements')), {
       product_id: product.id, change_qty: qty, reason: adjustReason, created_by: profile?.id,
       notes: 'Manual adjustment via Products page', created_at: serverTimestamp(),
     })
@@ -106,7 +106,7 @@ export default function Products() {
 
   const addCategory = async () => {
     if (!newCategoryName.trim()) return
-    await addDoc(collection(db, 'categories'), { name: newCategoryName.trim() })
+    await addDoc(collection(db, ...tPath('categories')), { name: newCategoryName.trim() })
     setNewCategoryName('')
     load()
   }
@@ -117,7 +117,7 @@ export default function Products() {
       return
     }
     if (!confirm(`Delete category "${cat.name}"?`)) return
-    await deleteDoc(doc(db, 'categories', cat.id))
+    await deleteDoc(doc(db, ...tPath('categories', cat.id)))
     load()
   }
 
