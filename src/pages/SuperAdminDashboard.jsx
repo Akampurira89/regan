@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { collection, getDocs, doc, setDoc, updateDoc } from 'firebase/firestore'
+import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore'
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth'
 import { db, secondaryAuth } from '../lib/firebase'
 import { useAuth } from '../context/AuthContext'
-import { Store, Users, CheckCircle2, XCircle, Search, Plus, LogOut, Sparkles } from 'lucide-react'
+import { Store, CheckCircle2, XCircle, Search, Plus, LogOut, Sparkles, Pencil, Trash2, ExternalLink } from 'lucide-react'
 
 const STATUS_STYLES = {
   active: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400',
@@ -12,30 +12,39 @@ const STATUS_STYLES = {
   trial: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400',
 }
 
-const AVATAR_COLORS = [
-  'bg-blue-500', 'bg-purple-500', 'bg-pink-500', 'bg-emerald-500',
-  'bg-amber-500', 'bg-cyan-500', 'bg-indigo-500', 'bg-rose-500',
+const AVATAR_GRADIENTS = [
+  'from-blue-500 to-cyan-500', 'from-purple-500 to-pink-500', 'from-pink-500 to-rose-500',
+  'from-emerald-500 to-teal-500', 'from-amber-500 to-orange-500', 'from-cyan-500 to-blue-500',
+  'from-indigo-500 to-purple-500', 'from-rose-500 to-red-500',
 ]
 
-const avatarColor = (name = '') => {
+const avatarGradient = (name = '') => {
   const sum = [...name].reduce((a, c) => a + c.charCodeAt(0), 0)
-  return AVATAR_COLORS[sum % AVATAR_COLORS.length]
+  return AVATAR_GRADIENTS[sum % AVATAR_GRADIENTS.length]
 }
 
 const slugify = (s) =>
   s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
 
-const emptyForm = { shopName: '', ownerName: '', plan: 'standard', adminEmail: '', adminPassword: '' }
+const emptyAddForm = { shopName: '', ownerName: '', plan: 'standard', adminEmail: '', adminPassword: '' }
 
 export default function SuperAdminDashboard() {
-  const { profile, logout } = useAuth()
+  const { logout } = useAuth()
   const [tenants, setTenants] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [modalOpen, setModalOpen] = useState(false)
-  const [form, setForm] = useState(emptyForm)
+
+  const [addOpen, setAddOpen] = useState(false)
+  const [addForm, setAddForm] = useState(emptyAddForm)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+
+  const [editTarget, setEditTarget] = useState(null)
+  const [editForm, setEditForm] = useState({ shopName: '', ownerName: '', plan: 'standard' })
+
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [deleteConfirmText, setDeleteConfirmText] = useState('')
+  const [deleting, setDeleting] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -48,9 +57,7 @@ export default function SuperAdminDashboard() {
   const filtered = useMemo(() => {
     if (!search) return tenants
     const q = search.toLowerCase()
-    return tenants.filter(
-      (t) => t.shopName?.toLowerCase().includes(q) || t.ownerName?.toLowerCase().includes(q)
-    )
+    return tenants.filter((t) => t.shopName?.toLowerCase().includes(q) || t.ownerName?.toLowerCase().includes(q))
   }, [tenants, search])
 
   const stats = useMemo(() => ({
@@ -65,22 +72,19 @@ export default function SuperAdminDashboard() {
     load()
   }
 
-  const openAdd = () => { setForm(emptyForm); setError(''); setModalOpen(true) }
+  // ---- Add Shop ----
+  const openAdd = () => { setAddForm(emptyAddForm); setError(''); setAddOpen(true) }
 
   const addShop = async (e) => {
     e.preventDefault()
     setError('')
-
-    if (!form.shopName || !form.ownerName || !form.adminEmail || !form.adminPassword) {
-      setError('Please fill in every field.')
-      return
+    if (!addForm.shopName || !addForm.ownerName || !addForm.adminEmail || !addForm.adminPassword) {
+      setError('Please fill in every field.'); return
     }
-    if (form.adminPassword.length < 6) {
-      setError('Password must be at least 6 characters.')
-      return
+    if (addForm.adminPassword.length < 6) {
+      setError('Password must be at least 6 characters.'); return
     }
-
-    let tenantId = slugify(form.shopName)
+    let tenantId = slugify(addForm.shopName)
     if (!tenantId) { setError('Please enter a valid shop name.'); return }
 
     setSaving(true)
@@ -88,27 +92,23 @@ export default function SuperAdminDashboard() {
       const existing = tenants.find((t) => t.id === tenantId)
       if (existing) tenantId = `${tenantId}-${Date.now().toString().slice(-4)}`
 
-      const cred = await createUserWithEmailAndPassword(secondaryAuth, form.adminEmail, form.adminPassword)
+      const cred = await createUserWithEmailAndPassword(secondaryAuth, addForm.adminEmail, addForm.adminPassword)
       const newUid = cred.user.uid
       await signOut(secondaryAuth)
 
       await setDoc(doc(db, 'tenants', tenantId), {
-        shopName: form.shopName,
-        ownerName: form.ownerName,
+        shopName: addForm.shopName,
+        ownerName: addForm.ownerName,
         subscriptionStatus: 'active',
-        plan: form.plan,
+        plan: addForm.plan,
         createdAt: new Date(),
       })
-
       await setDoc(doc(db, 'userTenants', newUid), { tenantId, role: 'admin' })
-
       await setDoc(doc(db, 'tenants', tenantId, 'profiles', newUid), {
-        full_name: form.ownerName,
-        role: 'admin',
-        is_active: true,
+        full_name: addForm.ownerName, role: 'admin', is_active: true,
       })
 
-      setModalOpen(false)
+      setAddOpen(false)
       load()
     } catch (err) {
       setError(err.message || 'Something went wrong. Please try again.')
@@ -117,9 +117,45 @@ export default function SuperAdminDashboard() {
     }
   }
 
+  // ---- Edit Shop ----
+  const openEdit = (t) => {
+    setEditTarget(t)
+    setEditForm({ shopName: t.shopName || '', ownerName: t.ownerName || '', plan: t.plan || 'standard' })
+  }
+
+  const saveEdit = async (e) => {
+    e.preventDefault()
+    await updateDoc(doc(db, 'tenants', editTarget.id), {
+      shopName: editForm.shopName,
+      ownerName: editForm.ownerName,
+      plan: editForm.plan,
+    })
+    setEditTarget(null)
+    load()
+  }
+
+  // ---- Delete Shop (Firestore side — Auth login must still be removed manually, see note in modal) ----
+  const openDelete = (t) => { setDeleteTarget(t); setDeleteConfirmText('') }
+
+  const confirmDelete = async () => {
+    if (deleteConfirmText !== deleteTarget.shopName) return
+    setDeleting(true)
+    try {
+      const profilesSnap = await getDocs(collection(db, 'tenants', deleteTarget.id, 'profiles'))
+      for (const p of profilesSnap.docs) {
+        await deleteDoc(doc(db, 'tenants', deleteTarget.id, 'profiles', p.id))
+        await deleteDoc(doc(db, 'userTenants', p.id))
+      }
+      await deleteDoc(doc(db, 'tenants', deleteTarget.id))
+      setDeleteTarget(null)
+      load()
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
-      {/* Header banner */}
       <div className="bg-gradient-to-br from-indigo-600 via-blue-600 to-cyan-600 px-4 sm:px-6 pt-6 pb-16">
         <div className="max-w-5xl mx-auto flex items-start justify-between">
           <div>
@@ -129,24 +165,19 @@ export default function SuperAdminDashboard() {
             <h1 className="text-2xl font-bold text-white">Manage Clients</h1>
             <p className="text-sm text-white/70 mt-0.5">Every shop running on your platform, in one place.</p>
           </div>
-          <button
-            onClick={logout}
-            className="flex items-center gap-1.5 text-sm text-white/90 hover:text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors"
-          >
+          <button onClick={logout} className="flex items-center gap-1.5 text-sm text-white/90 hover:text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors">
             <LogOut size={14} /> Log out
           </button>
         </div>
       </div>
 
       <div className="max-w-5xl mx-auto px-4 sm:px-6 -mt-10 pb-10">
-        {/* Stat cards */}
         <div className="grid grid-cols-3 gap-3 mb-6">
           <StatCard icon={Store} label="Total Shops" value={stats.total} color="text-blue-600 bg-blue-50 dark:bg-blue-900/30" />
           <StatCard icon={CheckCircle2} label="Active" value={stats.active} color="text-green-600 bg-green-50 dark:bg-green-900/30" />
           <StatCard icon={XCircle} label="Suspended" value={stats.expired} color="text-red-600 bg-red-50 dark:bg-red-900/30" />
         </div>
 
-        {/* Toolbar */}
         <div className="flex flex-wrap items-center gap-3 mb-4">
           <div className="relative flex-1 min-w-[180px]">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -157,47 +188,48 @@ export default function SuperAdminDashboard() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <button
-            onClick={openAdd}
-            className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 shadow-sm transition-colors"
-          >
+          <button onClick={openAdd} className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 shadow-sm transition-colors">
             <Plus size={16} /> Add Shop
           </button>
         </div>
 
-        {/* Shop list */}
         <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden">
           {loading ? (
             <p className="p-8 text-sm text-gray-400 text-center">Loading shops...</p>
           ) : filtered.length === 0 ? (
             <div className="p-10 text-center">
               <Store size={32} className="mx-auto text-gray-300 mb-2" />
-              <p className="text-sm text-gray-400">
-                {search ? 'No shops match your search.' : 'No shops yet. Tap "Add Shop" to create the first one.'}
-              </p>
+              <p className="text-sm text-gray-400">{search ? 'No shops match your search.' : 'No shops yet. Tap "Add Shop" to create the first one.'}</p>
             </div>
           ) : (
             <div className="divide-y divide-gray-100 dark:divide-gray-800">
               {filtered.map((t) => (
                 <div key={t.id} className="flex items-center gap-3 p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
                   <Link to={`/admin/shop/${t.id}`} className="flex items-center gap-3 flex-1 min-w-0">
-                    <div className={`w-10 h-10 rounded-xl ${avatarColor(t.shopName)} text-white flex items-center justify-center font-bold text-sm shrink-0`}>
+                    <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${avatarGradient(t.shopName)} text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-sm`}>
                       {(t.shopName || '?').charAt(0).toUpperCase()}
                     </div>
                     <div className="min-w-0">
-                      <p className="font-semibold text-gray-800 dark:text-gray-100 truncate">{t.shopName || '-'}</p>
+                      <p className="font-semibold text-gray-800 dark:text-gray-100 truncate flex items-center gap-1">
+                        {t.shopName || '-'} <ExternalLink size={11} className="text-gray-300" />
+                      </p>
                       <p className="text-xs text-gray-400 truncate">{t.ownerName || '-'} &middot; {t.plan || 'standard'}</p>
                     </div>
                   </Link>
                   <span className={`hidden sm:inline-flex px-2.5 py-1 rounded-full text-xs font-medium shrink-0 ${STATUS_STYLES[t.subscriptionStatus] || 'bg-gray-100 text-gray-500'}`}>
                     {t.subscriptionStatus || 'unknown'}
                   </span>
-                  <button
-                    onClick={() => toggleStatus(t)}
-                    className="text-xs font-medium text-blue-600 hover:underline shrink-0"
-                  >
-                    {t.subscriptionStatus === 'active' ? 'Suspend' : 'Activate'}
-                  </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={() => toggleStatus(t)} className="text-xs font-medium text-blue-600 hover:underline px-1.5">
+                      {t.subscriptionStatus === 'active' ? 'Suspend' : 'Activate'}
+                    </button>
+                    <button onClick={() => openEdit(t)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600" title="Edit shop details">
+                      <Pencil size={14} />
+                    </button>
+                    <button onClick={() => openDelete(t)} className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-600" title="Delete shop">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -205,7 +237,8 @@ export default function SuperAdminDashboard() {
         </div>
       </div>
 
-      {modalOpen && (
+      {/* Add Shop modal */}
+      {addOpen && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-sm p-6">
             <div className="flex items-center gap-2 mb-4">
@@ -215,25 +248,90 @@ export default function SuperAdminDashboard() {
               <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">Add New Shop</h2>
             </div>
             <form onSubmit={addShop} className="space-y-3">
-              <Field label="Shop Name" value={form.shopName} onChange={(v) => setForm({ ...form, shopName: v })} />
-              <Field label="Owner's Name" value={form.ownerName} onChange={(v) => setForm({ ...form, ownerName: v })} />
-              <Field label="Owner's Login Email" type="email" value={form.adminEmail} onChange={(v) => setForm({ ...form, adminEmail: v })} />
-              <Field
-                label="Temporary Password"
-                value={form.adminPassword}
-                onChange={(v) => setForm({ ...form, adminPassword: v })}
-                placeholder="At least 6 characters"
-              />
+              <Field label="Shop Name" value={addForm.shopName} onChange={(v) => setAddForm({ ...addForm, shopName: v })} />
+              <Field label="Owner's Name" value={addForm.ownerName} onChange={(v) => setAddForm({ ...addForm, ownerName: v })} />
+              <Field label="Owner's Login Email" type="email" value={addForm.adminEmail} onChange={(v) => setAddForm({ ...addForm, adminEmail: v })} />
+              <Field label="Temporary Password" value={addForm.adminPassword} onChange={(v) => setAddForm({ ...addForm, adminPassword: v })} placeholder="At least 6 characters" />
               {error && <p className="text-xs text-red-600 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-lg">{error}</p>}
               <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setModalOpen(false)} className="px-4 py-2 rounded-xl text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800">
-                  Cancel
-                </button>
+                <button type="button" onClick={() => setAddOpen(false)} className="px-4 py-2 rounded-xl text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800">Cancel</button>
                 <button type="submit" disabled={saving} className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
                   {saving ? 'Creating...' : 'Create Shop'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Shop modal */}
+      {editTarget && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-sm p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-9 h-9 rounded-lg bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center">
+                <Pencil size={15} className="text-blue-600" />
+              </div>
+              <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">Edit Shop</h2>
+            </div>
+            <form onSubmit={saveEdit} className="space-y-3">
+              <Field label="Shop Name" value={editForm.shopName} onChange={(v) => setEditForm({ ...editForm, shopName: v })} />
+              <Field label="Owner's Name" value={editForm.ownerName} onChange={(v) => setEditForm({ ...editForm, ownerName: v })} />
+              <div>
+                <label className="text-xs text-gray-500 dark:text-gray-400">Plan</label>
+                <select
+                  className="w-full mt-1 px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 text-sm"
+                  value={editForm.plan}
+                  onChange={(e) => setEditForm({ ...editForm, plan: e.target.value })}
+                >
+                  <option value="standard">Standard</option>
+                  <option value="premium">Premium</option>
+                  <option value="trial">Trial</option>
+                </select>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button type="button" onClick={() => setEditTarget(null)} className="px-4 py-2 rounded-xl text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800">Cancel</button>
+                <button type="submit" className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">Save Changes</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Shop modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-sm p-6">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-9 h-9 rounded-lg bg-red-100 dark:bg-red-900/40 flex items-center justify-center">
+                <Trash2 size={15} className="text-red-600" />
+              </div>
+              <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">Delete "{deleteTarget.shopName}"?</h2>
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+              This permanently deletes the shop record and all its staff profiles. This cannot be undone.
+            </p>
+            <p className="text-xs text-amber-600 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 rounded-lg mb-3">
+              Note: staff login accounts (Firebase Authentication) aren't deleted here — remove those separately in Firebase Console → Authentication if you want the emails free to reuse.
+            </p>
+            <label className="text-xs text-gray-500 dark:text-gray-400">
+              Type <strong>{deleteTarget.shopName}</strong> to confirm:
+            </label>
+            <input
+              className="w-full mt-1 mb-3 px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 text-sm"
+              value={deleteConfirmText}
+              onChange={(e) => setDeleteConfirmText(e.target.value)}
+            />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 rounded-xl text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800">Cancel</button>
+              <button
+                onClick={confirmDelete}
+                disabled={deleteConfirmText !== deleteTarget.shopName || deleting}
+                className="px-4 py-2 rounded-xl bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-40"
+              >
+                {deleting ? 'Deleting...' : 'Delete Permanently'}
+              </button>
+            </div>
           </div>
         </div>
       )}
