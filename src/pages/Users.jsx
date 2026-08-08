@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Plus } from 'lucide-react'
-import { collection, getDocs, updateDoc, doc, setDoc, serverTimestamp } from 'firebase/firestore'
+import { Plus, Trash2 } from 'lucide-react'
+import { collection, getDocs, updateDoc, doc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore'
 import { db, tPath } from '../lib/firebase'
 import { createStaffAuthAccount } from '../lib/createStaffAccount'
 import { Card, Badge, EmptyState, Button, Modal, Input, Select } from '../components/ui/ui'
@@ -38,6 +38,24 @@ export default function Users() {
     load()
   }
 
+  // Fully removes this person: deletes their shop profile AND their root-level
+  // tenant link. Without the link, they can't reach ANY shop's data — not even
+  // if someone tries to log in with their old credentials. Adding them back
+  // later (fresh "Add Staff") recreates access from scratch.
+  const removeStaff = async (user) => {
+    if (user.id === profile?.id) {
+      alert("You can't remove your own account while logged in as it.")
+      return
+    }
+    const confirmed = window.confirm(`Remove ${user.full_name}? They will lose all access immediately and won't be able to log in again unless re-added.`)
+    if (!confirmed) return
+
+    await deleteDoc(doc(db, ...tPath('profiles', user.id)))
+    await deleteDoc(doc(db, 'userTenants', user.id))
+    await logAudit({ userId: profile?.id, action: 'delete', entityType: 'profiles', entityId: user.id, newValues: { full_name: user.full_name } })
+    load()
+  }
+
   const addStaff = async (e) => {
     e.preventDefault()
     setError('')
@@ -48,6 +66,8 @@ export default function Users() {
       await setDoc(doc(db, ...tPath('profiles', uid)), {
         full_name: form.full_name, role: form.role, phone: form.phone, is_active: true, created_at: serverTimestamp(),
       })
+      // Link this new login to the current shop so they can actually log in and see the right menu.
+      await setDoc(doc(db, 'userTenants', uid), { tenantId: profile.tenantId })
       await logAudit({ userId: profile?.id, action: 'create', entityType: 'profiles', entityId: uid, newValues: { full_name: form.full_name, role: form.role } })
       setModalOpen(false); setForm(empty)
       load()
@@ -73,7 +93,7 @@ export default function Users() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead><tr className="text-left text-gray-400 border-b border-gray-100 dark:border-gray-800">
-                <th className="py-2">Name</th><th className="py-2">Phone</th><th className="py-2">Role</th><th className="py-2">Status</th><th className="py-2">Joined</th>
+                <th className="py-2">Name</th><th className="py-2">Phone</th><th className="py-2">Role</th><th className="py-2">Status</th><th className="py-2">Joined</th><th className="py-2 text-right">Remove</th>
               </tr></thead>
               <tbody>
                 {staff.map((u) => (
@@ -94,6 +114,11 @@ export default function Users() {
                       </button>
                     </td>
                     <td className="py-2 text-gray-500">{formatDate(u.created_at)}</td>
+                    <td className="py-2 text-right">
+                      <button onClick={() => removeStaff(u)} className="p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600" title="Remove completely">
+                        <Trash2 size={15} />
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
