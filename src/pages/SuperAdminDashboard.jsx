@@ -1,14 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { collection, getDocs, doc, setDoc, updateDoc } from 'firebase/firestore'
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth'
 import { db, secondaryAuth } from '../lib/firebase'
 import { useAuth } from '../context/AuthContext'
+import { Store, Users, CheckCircle2, XCircle, Search, Plus, LogOut, Sparkles } from 'lucide-react'
 
-const STATUS_COLORS = {
-  active: 'bg-green-100 text-green-700',
-  expired: 'bg-red-100 text-red-700',
-  trial: 'bg-yellow-100 text-yellow-700',
+const STATUS_STYLES = {
+  active: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400',
+  expired: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400',
+  trial: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-400',
+}
+
+const AVATAR_COLORS = [
+  'bg-blue-500', 'bg-purple-500', 'bg-pink-500', 'bg-emerald-500',
+  'bg-amber-500', 'bg-cyan-500', 'bg-indigo-500', 'bg-rose-500',
+]
+
+const avatarColor = (name = '') => {
+  const sum = [...name].reduce((a, c) => a + c.charCodeAt(0), 0)
+  return AVATAR_COLORS[sum % AVATAR_COLORS.length]
 }
 
 const slugify = (s) =>
@@ -17,9 +28,10 @@ const slugify = (s) =>
 const emptyForm = { shopName: '', ownerName: '', plan: 'standard', adminEmail: '', adminPassword: '' }
 
 export default function SuperAdminDashboard() {
-  const { logout } = useAuth()
+  const { profile, logout } = useAuth()
   const [tenants, setTenants] = useState([])
   const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState(emptyForm)
   const [saving, setSaving] = useState(false)
@@ -32,6 +44,20 @@ export default function SuperAdminDashboard() {
     setLoading(false)
   }
   useEffect(() => { load() }, [])
+
+  const filtered = useMemo(() => {
+    if (!search) return tenants
+    const q = search.toLowerCase()
+    return tenants.filter(
+      (t) => t.shopName?.toLowerCase().includes(q) || t.ownerName?.toLowerCase().includes(q)
+    )
+  }, [tenants, search])
+
+  const stats = useMemo(() => ({
+    total: tenants.length,
+    active: tenants.filter((t) => t.subscriptionStatus === 'active').length,
+    expired: tenants.filter((t) => t.subscriptionStatus === 'expired').length,
+  }), [tenants])
 
   const toggleStatus = async (t) => {
     const newStatus = t.subscriptionStatus === 'active' ? 'expired' : 'active'
@@ -92,142 +118,118 @@ export default function SuperAdminDashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-4 sm:p-6">
-      <div className="max-w-4xl mx-auto">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
+      {/* Header banner */}
+      <div className="bg-gradient-to-br from-indigo-600 via-blue-600 to-cyan-600 px-4 sm:px-6 pt-6 pb-16">
+        <div className="max-w-5xl mx-auto flex items-start justify-between">
           <div>
-            <h1 className="text-xl font-bold text-gray-800 dark:text-gray-100">Manage Clients</h1>
-            <p className="text-sm text-gray-400">All shops using this system. Tap a shop to view its live data.</p>
+            <div className="flex items-center gap-2 text-white/80 text-xs font-medium mb-1">
+              <Sparkles size={13} /> SUPER ADMIN
+            </div>
+            <h1 className="text-2xl font-bold text-white">Manage Clients</h1>
+            <p className="text-sm text-white/70 mt-0.5">Every shop running on your platform, in one place.</p>
           </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={openAdd}
-              className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
-            >
-              + Add Shop
-            </button>
-            <button onClick={logout} className="text-sm text-red-600 hover:underline">Log out</button>
-          </div>
+          <button
+            onClick={logout}
+            className="flex items-center gap-1.5 text-sm text-white/90 hover:text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors"
+          >
+            <LogOut size={14} /> Log out
+          </button>
+        </div>
+      </div>
+
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 -mt-10 pb-10">
+        {/* Stat cards */}
+        <div className="grid grid-cols-3 gap-3 mb-6">
+          <StatCard icon={Store} label="Total Shops" value={stats.total} color="text-blue-600 bg-blue-50 dark:bg-blue-900/30" />
+          <StatCard icon={CheckCircle2} label="Active" value={stats.active} color="text-green-600 bg-green-50 dark:bg-green-900/30" />
+          <StatCard icon={XCircle} label="Suspended" value={stats.expired} color="text-red-600 bg-red-50 dark:bg-red-900/30" />
         </div>
 
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm overflow-hidden">
-          {loading ? (
-            <p className="p-6 text-sm text-gray-400">Loading...</p>
-          ) : tenants.length === 0 ? (
-            <p className="p-6 text-sm text-gray-400">No shops yet. Tap "+ Add Shop" to create the first one.</p>
-          ) : (
-            <>
-              {/* Mobile: stacked cards */}
-              <div className="sm:hidden divide-y divide-gray-100 dark:divide-gray-700">
-                {tenants.map((t) => (
-                  <div key={t.id} className="p-4">
-                    <Link to={`/admin/shop/${t.id}`} className="block">
-                      <div className="flex items-center justify-between mb-1">
-                        <p className="font-medium text-blue-600">{t.shopName || '-'}</p>
-                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[t.subscriptionStatus] || 'bg-gray-100 text-gray-600'}`}>
-                          {t.subscriptionStatus || 'unknown'}
-                        </span>
-                      </div>
-                      <p className="text-xs text-gray-500">{t.ownerName || '-'} &middot; {t.plan || 'standard'}</p>
-                      <p className="text-xs text-gray-400 mt-1">{t.id}</p>
-                    </Link>
-                    <button onClick={() => toggleStatus(t)} className="mt-2 text-xs text-blue-600 hover:underline">
-                      {t.subscriptionStatus === 'active' ? 'Suspend' : 'Activate'}
-                    </button>
-                  </div>
-                ))}
-              </div>
+        {/* Toolbar */}
+        <div className="flex flex-wrap items-center gap-3 mb-4">
+          <div className="relative flex-1 min-w-[180px]">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Search shops or owners..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <button
+            onClick={openAdd}
+            className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 shadow-sm transition-colors"
+          >
+            <Plus size={16} /> Add Shop
+          </button>
+        </div>
 
-              {/* Desktop/tablet: table */}
-              <div className="hidden sm:block overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-gray-400 border-b border-gray-100 dark:border-gray-700">
-                      <th className="py-3 px-4">Shop</th>
-                      <th className="py-3 px-4">Owner</th>
-                      <th className="py-3 px-4">Plan</th>
-                      <th className="py-3 px-4">Status</th>
-                      <th className="py-3 px-4">Tenant ID</th>
-                      <th className="py-3 px-4 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tenants.map((t) => (
-                      <tr key={t.id} className="border-b border-gray-50 dark:border-gray-700/50">
-                        <td className="py-3 px-4 font-medium">
-                          <Link to={`/admin/shop/${t.id}`} className="text-blue-600 hover:underline">
-                            {t.shopName || '-'}
-                          </Link>
-                        </td>
-                        <td className="py-3 px-4 text-gray-500">{t.ownerName || '-'}</td>
-                        <td className="py-3 px-4 text-gray-500">{t.plan || 'standard'}</td>
-                        <td className="py-3 px-4">
-                          <span className={`px-2 py-1 rounded text-xs font-medium ${STATUS_COLORS[t.subscriptionStatus] || 'bg-gray-100 text-gray-600'}`}>
-                            {t.subscriptionStatus || 'unknown'}
-                          </span>
-                        </td>
-                        <td className="py-3 px-4 text-gray-400 text-xs">{t.id}</td>
-                        <td className="py-3 px-4 text-right">
-                          <button onClick={() => toggleStatus(t)} className="text-blue-600 hover:underline text-xs">
-                            {t.subscriptionStatus === 'active' ? 'Suspend' : 'Activate'}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
+        {/* Shop list */}
+        <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-800 overflow-hidden">
+          {loading ? (
+            <p className="p-8 text-sm text-gray-400 text-center">Loading shops...</p>
+          ) : filtered.length === 0 ? (
+            <div className="p-10 text-center">
+              <Store size={32} className="mx-auto text-gray-300 mb-2" />
+              <p className="text-sm text-gray-400">
+                {search ? 'No shops match your search.' : 'No shops yet. Tap "Add Shop" to create the first one.'}
+              </p>
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-100 dark:divide-gray-800">
+              {filtered.map((t) => (
+                <div key={t.id} className="flex items-center gap-3 p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                  <Link to={`/admin/shop/${t.id}`} className="flex items-center gap-3 flex-1 min-w-0">
+                    <div className={`w-10 h-10 rounded-xl ${avatarColor(t.shopName)} text-white flex items-center justify-center font-bold text-sm shrink-0`}>
+                      {(t.shopName || '?').charAt(0).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-gray-800 dark:text-gray-100 truncate">{t.shopName || '-'}</p>
+                      <p className="text-xs text-gray-400 truncate">{t.ownerName || '-'} &middot; {t.plan || 'standard'}</p>
+                    </div>
+                  </Link>
+                  <span className={`hidden sm:inline-flex px-2.5 py-1 rounded-full text-xs font-medium shrink-0 ${STATUS_STYLES[t.subscriptionStatus] || 'bg-gray-100 text-gray-500'}`}>
+                    {t.subscriptionStatus || 'unknown'}
+                  </span>
+                  <button
+                    onClick={() => toggleStatus(t)}
+                    className="text-xs font-medium text-blue-600 hover:underline shrink-0"
+                  >
+                    {t.subscriptionStatus === 'active' ? 'Suspend' : 'Activate'}
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       </div>
 
       {modalOpen && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg w-full max-w-sm p-5">
-            <h2 className="text-lg font-bold mb-3 text-gray-800 dark:text-gray-100">Add New Shop</h2>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-sm p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-9 h-9 rounded-lg bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center">
+                <Store size={17} className="text-blue-600" />
+              </div>
+              <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">Add New Shop</h2>
+            </div>
             <form onSubmit={addShop} className="space-y-3">
-              <div>
-                <label className="text-xs text-gray-500">Shop Name</label>
-                <input
-                  className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm"
-                  value={form.shopName}
-                  onChange={(e) => setForm({ ...form, shopName: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-gray-500">Owner's Name</label>
-                <input
-                  className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm"
-                  value={form.ownerName}
-                  onChange={(e) => setForm({ ...form, ownerName: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-gray-500">Owner's Login Email</label>
-                <input
-                  type="email"
-                  className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm"
-                  value={form.adminEmail}
-                  onChange={(e) => setForm({ ...form, adminEmail: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="text-xs text-gray-500">Temporary Password</label>
-                <input
-                  type="text"
-                  className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100 text-sm"
-                  value={form.adminPassword}
-                  onChange={(e) => setForm({ ...form, adminPassword: e.target.value })}
-                  placeholder="At least 6 characters"
-                />
-              </div>
-              {error && <p className="text-xs text-red-600">{error}</p>}
+              <Field label="Shop Name" value={form.shopName} onChange={(v) => setForm({ ...form, shopName: v })} />
+              <Field label="Owner's Name" value={form.ownerName} onChange={(v) => setForm({ ...form, ownerName: v })} />
+              <Field label="Owner's Login Email" type="email" value={form.adminEmail} onChange={(v) => setForm({ ...form, adminEmail: v })} />
+              <Field
+                label="Temporary Password"
+                value={form.adminPassword}
+                onChange={(v) => setForm({ ...form, adminPassword: v })}
+                placeholder="At least 6 characters"
+              />
+              {error && <p className="text-xs text-red-600 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-lg">{error}</p>}
               <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setModalOpen(false)} className="px-3 py-2 rounded-lg text-sm text-gray-600 dark:text-gray-300">
+                <button type="button" onClick={() => setModalOpen(false)} className="px-4 py-2 rounded-xl text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800">
                   Cancel
                 </button>
-                <button type="submit" disabled={saving} className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                <button type="submit" disabled={saving} className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
                   {saving ? 'Creating...' : 'Create Shop'}
                 </button>
               </div>
@@ -235,6 +237,33 @@ export default function SuperAdminDashboard() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function StatCard({ icon: Icon, label, value, color }) {
+  return (
+    <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-800 p-4">
+      <div className={`w-9 h-9 rounded-lg ${color} flex items-center justify-center mb-2`}>
+        <Icon size={17} />
+      </div>
+      <p className="text-2xl font-bold text-gray-800 dark:text-gray-100">{value}</p>
+      <p className="text-xs text-gray-400">{label}</p>
+    </div>
+  )
+}
+
+function Field({ label, value, onChange, type = 'text', placeholder }) {
+  return (
+    <div>
+      <label className="text-xs text-gray-500 dark:text-gray-400">{label}</label>
+      <input
+        type={type}
+        className="w-full mt-1 px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+      />
     </div>
   )
 }
