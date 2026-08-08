@@ -1,6 +1,6 @@
-import { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
 import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth'
-import { doc, getDoc, addDoc, collection, serverTimestamp } from 'firebase/firestore'
+import { doc, getDoc, addDoc, collection, serverTimestamp, onSnapshot } from 'firebase/firestore'
 import { auth, db, tPath, setTenantId, TENANT_ID } from '../lib/firebase'
 
 const AuthContext = createContext(null)
@@ -19,11 +19,17 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [blockedReason, setBlockedReason] = useState(null) // 'disabled' | 'suspended' | null
+  const watchersRef = useRef([])
 
-  // Every user (super admin or shop staff) has one small lookup document at the
-  // ROOT level: userTenants/{uid}. This tells us which tenant they belong to
-  // (or that they're a super admin) BEFORE we know which tenant's profile to load.
+  const clearWatchers = () => {
+    watchersRef.current.forEach((unsub) => unsub())
+    watchersRef.current = []
+  }
+
   const loadProfile = useCallback(async (uid) => {
+    clearWatchers()
+
     if (!uid) {
       setProfile(null)
       setTenantId(null)
@@ -32,7 +38,6 @@ export function AuthProvider({ children }) {
 
     const linkSnap = await getDoc(doc(db, 'userTenants', uid))
     if (!linkSnap.exists()) {
-      // No link record = not provisioned yet. Treat as logged out.
       setProfile(null)
       setTenantId(null)
       return
@@ -41,13 +46,49 @@ export function AuthProvider({ children }) {
 
     if (link.role === 'super_admin') {
       setTenantId(null)
+      setBlockedReason(null)
       setProfile({ id: uid, role: 'super_admin', tenantId: null })
       return
     }
 
     setTenantId(link.tenantId)
-    const snap = await getDoc(doc(db, ...tPath('profiles', uid)))
-    setProfile(snap.exists() ? { id: snap.id, tenantId: link.tenantId, ...snap.data() } : null)
+
+    // Check the shop itself hasn't been suspended by the super admin
+    const tenantSnap = await getDoc(doc(db, 'tenants', link.tenantId))
+    if (!tenantSnap.exists() || tenantSnap.data().subscriptionStatus !== 'active') {
+      setProfile(null)
+      setBlockedReason('suspended')
+      await signOut(auth)
+      return
+    }
+
+    // Check this specific staff member hasn't been disabled by their shop admin
+    const profSnap = await getDoc(doc(db, ...tPath('profiles', uid)))
+    if (!profSnap.exists() || profSnap.data().is_active === false) {
+      setProfile(null)
+      setBlockedReason('disabled')
+      await signOut(auth)
+      return
+    }
+
+    setBlockedReason(null)
+    setProfile({ id: profSnap.id, tenantId: link.tenantId, ...profSnap.data() })
+
+    // Live watchers: if an admin disables this person, or the shop gets suspended,
+    // WHILE they're actively using the app, log them out immediately (not just on next login).
+    const unsubProfile = onSnapshot(doc(db, ...tPath('profiles', uid)), (s) => {
+      if (!s.exists() || s.data().is_active === false) {
+        setBlockedReason('disabled')
+        signOut(auth)
+      }
+    })
+    const unsubTenant = onSnapshot(doc(db, 'tenants', link.tenantId), (s) => {
+      if (!s.exists() || s.data().subscriptionStatus !== 'active') {
+        setBlockedReason('suspended')
+        signOut(auth)
+      }
+    })
+    watchersRef.current = [unsubProfile, unsubTenant]
   }, [])
 
   useEffect(() => {
@@ -56,13 +97,13 @@ export function AuthProvider({ children }) {
       await loadProfile(u?.uid)
       setLoading(false)
     })
-    return unsub
+    return () => { unsub(); clearWatchers() }
   }, [loadProfile])
 
   const login = async (email, password) => {
+    setBlockedReason(null)
     const cred = await signInWithEmailAndPassword(auth, email, password)
     await loadProfile(cred.user.uid)
-    // Only log shop-level logins (super admin has no tenant to log against)
     if (TENANT_ID) {
       await addDoc(collection(db, ...tPath('loginHistory')), {
         user_id: cred.user.uid,
@@ -74,18 +115,19 @@ export function AuthProvider({ children }) {
   }
 
   const logout = async () => {
+    clearWatchers()
     await signOut(auth)
     setTenantId(null)
   }
 
   const can = (pageKey) => {
     if (!profile) return false
-    if (profile.role === 'super_admin') return false // super admin uses its own screen, not shop pages
+    if (profile.role === 'super_admin') return false
     const perms = ROLE_PERMISSIONS[profile.role] || []
     return perms.includes('*') || perms.includes(pageKey)
   }
 
-  const value = { session: user, profile, loading, login, logout, can }
+  const value = { session: user, profile, loading, blockedReason, login, logout, can }
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
