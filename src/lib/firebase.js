@@ -1,4 +1,4 @@
-import { initializeApp } from 'firebase/app'
+import { initializeApp, getApps } from 'firebase/app'
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore'
 import { getAuth } from 'firebase/auth'
 
@@ -23,10 +23,14 @@ export const db = initializeFirestore(app, {
 
 export const auth = getAuth(app)
 
+// A second, independent Firebase Auth instance. Used only when the Super Admin
+// creates a new shop's first login — creating a user normally signs the app in
+// as that new user, which would kick the Super Admin out. Using a separate
+// instance avoids that entirely.
+const secondaryApp = getApps().find((a) => a.name === 'Secondary') || initializeApp(firebaseConfig, 'Secondary')
+export const secondaryAuth = getAuth(secondaryApp)
+
 // ---- Multi-tenant support ----
-// TENANT_ID is no longer fixed. It's set right after login, based on which shop
-// the logged-in user belongs to (see AuthContext.jsx). Super admins have no
-// tenant at all (they see the "Manage Clients" screen instead of shop data).
 export let TENANT_ID = null
 
 export function setTenantId(id) {
@@ -34,8 +38,6 @@ export function setTenantId(id) {
 }
 
 // tPath('products') -> ['tenants', TENANT_ID, 'products']
-// Throws clearly if called before a tenant is known, instead of silently
-// reading/writing the wrong shop's data.
 export const tPath = (...segments) => {
   if (!TENANT_ID) {
     throw new Error('tPath() called before a tenant was set — check AuthContext login flow.')
