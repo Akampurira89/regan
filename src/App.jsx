@@ -22,9 +22,8 @@ import BackupExport from './pages/BackupExport'
 import ReceiptSettings from './pages/receipts/ReceiptSettings'
 import ReceiptHistory from './pages/receipts/ReceiptHistory'
 import SuperAdminDashboard from './pages/SuperAdminDashboard'
+import TenantDetail from './pages/TenantDetail'
 
-// Sends a logged-in super admin straight to the clients screen, and blocks
-// regular shop staff from reaching it directly by URL.
 function SuperAdminRoute({ children }) {
   const { session, profile, loading } = useAuth()
   if (loading) {
@@ -35,8 +34,6 @@ function SuperAdminRoute({ children }) {
   return children
 }
 
-// Once we know who's logged in, keep a super admin out of the normal shop
-// routes (in case they land on "/" directly) and send them to their own screen.
 function RootRedirect() {
   const { profile } = useAuth()
   if (profile?.role === 'super_admin') return <Navigate to="/admin" replace />
@@ -51,6 +48,7 @@ export default function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/admin" element={<SuperAdminRoute><SuperAdminDashboard /></SuperAdminRoute>} />
+            <Route path="/admin/shop/:tenantId" element={<SuperAdminRoute><TenantDetail /></SuperAdminRoute>} />
             <Route
               path="/"
               element={
