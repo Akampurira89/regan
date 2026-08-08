@@ -3,12 +3,17 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { Button, Input, Card } from '../components/ui/ui'
 
+const BLOCK_MESSAGES = {
+  disabled: 'Your account has been disabled. Please contact your shop admin.',
+  suspended: "This shop's subscription is not active. Please contact the platform owner.",
+}
+
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const { login } = useAuth()
+  const { login, blockedReason } = useAuth()
   const navigate = useNavigate()
 
   const submit = async (e) => {
@@ -33,6 +38,11 @@ export default function Login() {
           <h1 className="text-lg font-bold text-gray-800 dark:text-gray-100">EDDY K. ELECTRONICS</h1>
           <p className="text-xs text-gray-400">Shop Management System</p>
         </div>
+        {blockedReason && (
+          <p className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-lg mb-3">
+            {BLOCK_MESSAGES[blockedReason] || 'Access denied.'}
+          </p>
+        )}
         <form onSubmit={submit}>
           <Input label="Email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@shop.com" />
           <Input label="Password" type="password" required value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" />
