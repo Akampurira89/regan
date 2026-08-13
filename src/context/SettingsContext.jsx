@@ -1,22 +1,12 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react'
 import { doc, getDoc, setDoc } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { seedDefaultsIfEmpty } from '../lib/seedDefaults'
+import { useAuth } from './AuthContext'
 
-// A curated palette of distinct, good-looking accent colors — cycled through
-// automatically on each app load when "auto_color_rotate" is on, so the shop
-// gets a fresh look every time without anyone having to pick manually.
 const COLOR_PALETTE = [
-  '#c2410c', // amber/orange (original brand)
-  '#0f766e', // teal
-  '#7c3aed', // violet
-  '#be123c', // rose
-  '#0369a1', // ocean blue
-  '#15803d', // green
-  '#a16207', // gold
-  '#4338ca', // indigo
-  '#0891b2', // cyan
-  '#b91c1c', // red
+  '#c2410c', '#0f766e', '#7c3aed', '#be123c', '#0369a1',
+  '#15803d', '#a16207', '#4338ca', '#0891b2', '#b91c1c',
 ]
 
 function pickRandomColor() {
@@ -40,14 +30,14 @@ function shadeColor(hex, percent) {
 const SettingsContext = createContext(null)
 
 const DEFAULT_TEMPLATE = {
-  shop_name: 'EDDY .K. ELECTRONICS',
+  shop_name: 'MY SHOP',
   logo_url: '',
-  address: 'La Grand Mall shop No.6 High Street',
-  town: 'Mbarara',
-  po_box: 'Mbarara',
-  email: 'ekasigaire@gmail.com',
-  phone_numbers: '0706 270 169/0787 821 439',
-  dealers_line: 'Dealers in: Tvs, Fridges, Deep Freezers, Phones and Accessories, Woofers, Fridge guards etc',
+  address: '',
+  town: '',
+  po_box: '',
+  email: '',
+  phone_numbers: '',
+  dealers_line: '',
   receipt_title: 'RECEIPT',
   footer_note: 'Once goods sold are not returnable.',
   customer_contact_label: 'M/S',
@@ -65,29 +55,44 @@ const DEFAULT_TEMPLATE = {
 
 const DEFAULT_COMPANY = {
   currency: 'UGX', multi_branch: false, low_stock_default: 3,
-  mtn_number: '0781137391', airtel_number: '0743111076',
+  mtn_number: '', airtel_number: '',
   min_sale_amount: 0, allow_price_negotiation: true, accent_color: '#c2410c', auto_color_rotate: true,
 }
 
 export function SettingsProvider({ children }) {
+  const { profile } = useAuth()
+  const tenantId = profile?.tenantId || null
+
   const [template, setTemplate] = useState(DEFAULT_TEMPLATE)
   const [company, setCompany] = useState(DEFAULT_COMPANY)
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('eddyk_dark') === '1')
   const [loading, setLoading] = useState(true)
 
+  // Re-fetches whenever the logged-in tenant changes (login, logout, or a super
+  // admin viewing the app with no shop context at all). Each shop only ever
+  // sees and edits its own branding — never another shop's.
   const refresh = useCallback(async () => {
-    setLoading(true)
-    const tplSnap = await getDoc(doc(db, 'settings', 'receiptTemplate'))
-    if (tplSnap.exists()) setTemplate({ ...DEFAULT_TEMPLATE, ...tplSnap.data() })
-    else await setDoc(doc(db, 'settings', 'receiptTemplate'), DEFAULT_TEMPLATE)
+    if (!tenantId) {
+      // No shop context (logged out, or super admin) — just use safe defaults,
+      // nothing to fetch or write.
+      setTemplate(DEFAULT_TEMPLATE)
+      setCompany(DEFAULT_COMPANY)
+      setLoading(false)
+      return
+    }
 
-    const compSnap = await getDoc(doc(db, 'settings', 'company'))
+    setLoading(true)
+    const tplSnap = await getDoc(doc(db, ...tPath('settings', 'receiptTemplate')))
+    if (tplSnap.exists()) setTemplate({ ...DEFAULT_TEMPLATE, ...tplSnap.data() })
+    else await setDoc(doc(db, ...tPath('settings', 'receiptTemplate')), DEFAULT_TEMPLATE)
+
+    const compSnap = await getDoc(doc(db, ...tPath('settings', 'company')))
     if (compSnap.exists()) setCompany({ ...DEFAULT_COMPANY, ...compSnap.data() })
-    else await setDoc(doc(db, 'settings', 'company'), DEFAULT_COMPANY)
+    else await setDoc(doc(db, ...tPath('settings', 'company')), DEFAULT_COMPANY)
 
     await seedDefaultsIfEmpty()
     setLoading(false)
-  }, [])
+  }, [tenantId])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -102,20 +107,20 @@ export function SettingsProvider({ children }) {
     root.style.setProperty('--color-brand', useColor)
     root.style.setProperty('--color-brand-dark', shadeColor(useColor, -30))
     root.style.setProperty('--color-brand-light', shadeColor(useColor, 40))
-    // Intentionally only re-runs when auto_color_rotate or the manual color changes —
-    // NOT on every render — so the color picked on load stays stable for the session.
   }, [company.auto_color_rotate, company.accent_color])
 
   const saveTemplate = async (updates) => {
+    if (!tenantId) return
     const next = { ...template, ...updates }
-    await setDoc(doc(db, 'settings', 'receiptTemplate'), next, { merge: true })
+    await setDoc(doc(db, ...tPath('settings', 'receiptTemplate')), next, { merge: true })
     setTemplate(next)
     return next
   }
 
   const saveCompany = async (updates) => {
+    if (!tenantId) return
     const next = { ...company, ...updates }
-    await setDoc(doc(db, 'settings', 'company'), next, { merge: true })
+    await setDoc(doc(db, ...tPath('settings', 'company')), next, { merge: true })
     setCompany(next)
     return next
   }
