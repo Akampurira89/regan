@@ -19,8 +19,12 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [blockedReason, setBlockedReason] = useState(null) // 'disabled' | 'suspended' | null
+  const [blockedReason, setBlockedReason] = useState(null)
   const watchersRef = useRef([])
+
+  // Super admin "view as this shop" mode. Not persisted — always starts fresh
+  // from Manage Clients each session, so nobody's left inside a shop by accident.
+  const [viewingAs, setViewingAs] = useState(null) // { tenantId, shopName } | null
 
   const clearWatchers = () => {
     watchersRef.current.forEach((unsub) => unsub())
@@ -33,6 +37,7 @@ export function AuthProvider({ children }) {
     if (!uid) {
       setProfile(null)
       setTenantId(null)
+      setViewingAs(null)
       return
     }
 
@@ -47,13 +52,12 @@ export function AuthProvider({ children }) {
     if (link.role === 'super_admin') {
       setTenantId(null)
       setBlockedReason(null)
-      setProfile({ id: uid, role: 'super_admin', tenantId: null })
+      setProfile({ id: uid, role: 'super_admin', full_name: 'Super Admin', tenantId: null })
       return
     }
 
     setTenantId(link.tenantId)
 
-    // Check the shop itself hasn't been suspended by the super admin
     const tenantSnap = await getDoc(doc(db, 'tenants', link.tenantId))
     if (!tenantSnap.exists() || tenantSnap.data().subscriptionStatus !== 'active') {
       setProfile(null)
@@ -62,7 +66,6 @@ export function AuthProvider({ children }) {
       return
     }
 
-    // Check this specific staff member hasn't been disabled by their shop admin
     const profSnap = await getDoc(doc(db, ...tPath('profiles', uid)))
     if (!profSnap.exists() || profSnap.data().is_active === false) {
       setProfile(null)
@@ -74,8 +77,6 @@ export function AuthProvider({ children }) {
     setBlockedReason(null)
     setProfile({ id: profSnap.id, tenantId: link.tenantId, ...profSnap.data() })
 
-    // Live watchers: if an admin disables this person, or the shop gets suspended,
-    // WHILE they're actively using the app, log them out immediately (not just on next login).
     const unsubProfile = onSnapshot(doc(db, ...tPath('profiles', uid)), (s) => {
       if (!s.exists() || s.data().is_active === false) {
         setBlockedReason('disabled')
@@ -116,18 +117,43 @@ export function AuthProvider({ children }) {
 
   const logout = async () => {
     clearWatchers()
+    setViewingAs(null)
     await signOut(auth)
     setTenantId(null)
   }
 
+  // Lets a super admin step into a specific shop and see/use it exactly like
+  // that shop's own admin would — same pages, same data, same permissions.
+  const viewAsShop = (tenantId, shopName) => {
+    if (profile?.role !== 'super_admin') return
+    setTenantId(tenantId)
+    setViewingAs({ tenantId, shopName })
+  }
+
+  const exitViewAs = () => {
+    setTenantId(null)
+    setViewingAs(null)
+  }
+
+  // The tenant currently "in effect" for data access: the shop staff's own
+  // tenant, OR whichever shop a super admin is currently viewing, OR none.
+  const activeTenantId = profile?.role === 'super_admin' ? (viewingAs?.tenantId || null) : (profile?.tenantId || null)
+
   const can = (pageKey) => {
+    if (profile?.role === 'super_admin') {
+      // Full access to every shop page while viewing a shop, same as that
+      // shop's own admin would have. No access to shop pages otherwise.
+      return !!viewingAs
+    }
     if (!profile) return false
-    if (profile.role === 'super_admin') return false
     const perms = ROLE_PERMISSIONS[profile.role] || []
     return perms.includes('*') || perms.includes(pageKey)
   }
 
-  const value = { session: user, profile, loading, blockedReason, login, logout, can }
+  const value = {
+    session: user, profile, loading, blockedReason, login, logout, can,
+    viewingAs, viewAsShop, exitViewAs, activeTenantId,
+  }
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
