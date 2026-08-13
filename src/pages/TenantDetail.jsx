@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { collection, getDocs, doc, getDoc } from 'firebase/firestore'
 import { db } from '../lib/firebase'
-import { ArrowLeft, DollarSign, ShoppingCart, Package, Users2, UserCog } from 'lucide-react'
+import { useAuth } from '../context/AuthContext'
+import { ArrowLeft, DollarSign, ShoppingCart, Package, Users2, UserCog, LayoutDashboard } from 'lucide-react'
 
 const STATUS_STYLES = {
   active: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400',
@@ -12,6 +13,8 @@ const STATUS_STYLES = {
 
 export default function TenantDetail() {
   const { tenantId } = useParams()
+  const { viewAsShop } = useAuth()
+  const navigate = useNavigate()
   const [tenant, setTenant] = useState(null)
   const [stats, setStats] = useState(null)
   const [recentSales, setRecentSales] = useState([])
@@ -49,6 +52,11 @@ export default function TenantDetail() {
     load()
   }, [tenantId])
 
+  const openFullDashboard = () => {
+    viewAsShop(tenantId, tenant?.shopName || tenantId)
+    navigate('/')
+  }
+
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center text-gray-400 text-sm">Loading...</div>
   }
@@ -60,16 +68,24 @@ export default function TenantDetail() {
           <Link to="/admin" className="inline-flex items-center gap-1 text-sm text-white/80 hover:text-white mb-3">
             <ArrowLeft size={15} /> Back to all shops
           </Link>
-          <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="flex items-center justify-between flex-wrap gap-3">
             <div>
               <h1 className="text-2xl font-bold text-white">{tenant?.shopName || tenantId}</h1>
               <p className="text-sm text-white/70 mt-0.5">
                 {tenant?.ownerName || '-'} &middot; {tenant?.plan || 'standard'} plan
               </p>
             </div>
-            <span className={`px-3 py-1 rounded-full text-xs font-medium ${STATUS_STYLES[tenant?.subscriptionStatus] || 'bg-white/20 text-white'}`}>
-              {tenant?.subscriptionStatus || 'unknown'}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className={`px-3 py-1 rounded-full text-xs font-medium ${STATUS_STYLES[tenant?.subscriptionStatus] || 'bg-white/20 text-white'}`}>
+                {tenant?.subscriptionStatus || 'unknown'}
+              </span>
+              <button
+                onClick={openFullDashboard}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-blue-700 text-xs font-semibold hover:bg-white/90 shadow-sm"
+              >
+                <LayoutDashboard size={14} /> Open Full Dashboard
+              </button>
+            </div>
           </div>
         </div>
       </div>
