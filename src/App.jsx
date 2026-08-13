@@ -34,9 +34,11 @@ function SuperAdminRoute({ children }) {
   return children
 }
 
+// A super admin only reaches the normal shop routes while actively "viewing
+// as" a specific shop. Otherwise they're sent to Manage Clients.
 function RootRedirect() {
-  const { profile } = useAuth()
-  if (profile?.role === 'super_admin') return <Navigate to="/admin" replace />
+  const { profile, viewingAs } = useAuth()
+  if (profile?.role === 'super_admin' && !viewingAs) return <Navigate to="/admin" replace />
   return <DashboardLayout />
 }
 
