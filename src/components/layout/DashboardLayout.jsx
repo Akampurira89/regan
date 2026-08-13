@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, Package, ShoppingCart, Truck, Users, Building2,
   Wallet, BarChart3, UserCog, Settings as SettingsIcon, ClipboardList,
-  Database, Menu, X, LogOut, Moon, Sun, Receipt, Calculator, HandCoins, Landmark,
+  Database, Menu, X, LogOut, Moon, Sun, Receipt, Calculator, HandCoins, Landmark, Eye,
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { useSettings } from '../../context/SettingsContext'
@@ -31,7 +31,7 @@ const NAV = [
 export default function DashboardLayout() {
   const [open, setOpen] = useState(false)
   const [calcOpen, setCalcOpen] = useState(false)
-  const { profile, logout, can } = useAuth()
+  const { profile, logout, can, viewingAs, exitViewAs } = useAuth()
   const { template, darkMode, setDarkMode } = useSettings()
   const navigate = useNavigate()
 
@@ -40,10 +40,32 @@ export default function DashboardLayout() {
     navigate('/login')
   }
 
-  const visibleNav = NAV.filter((item) => (item.adminOnly ? profile?.role === 'admin' : can(item.key)))
+  const backToClients = () => {
+    exitViewAs()
+    navigate('/admin')
+  }
+
+  // A super admin "viewing as" a shop gets the same access as that shop's own
+  // admin — adminOnly items included — since they're seeing exactly what the
+  // real admin would see.
+  const visibleNav = NAV.filter((item) =>
+    item.adminOnly ? (profile?.role === 'admin' || (profile?.role === 'super_admin' && viewingAs)) : can(item.key)
+  )
 
   return (
-    <div className="min-h-screen flex bg-gray-50 dark:bg-gray-950">
+    <div className="min-h-screen flex flex-col bg-gray-50 dark:bg-gray-950">
+      {/* Super admin "viewing as" banner — always visible so it's unmistakable
+          this isn't a real shop admin session. */}
+      {viewingAs && (
+        <div className="h-10 bg-amber-500 text-amber-950 flex items-center justify-center gap-2 text-xs font-medium px-3 z-50 shrink-0">
+          <Eye size={14} />
+          Viewing <strong>{viewingAs.shopName}</strong> as Super Admin
+          <button onClick={backToClients} className="ml-2 underline hover:no-underline">
+            Exit to Manage Clients
+          </button>
+        </div>
+      )}
+      <div className="flex-1 flex min-h-0">
       {/* Sidebar */}
       <aside
         className={`fixed lg:static z-40 inset-y-0 left-0 w-64 bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800 transform transition-transform lg:translate-x-0 ${
@@ -106,8 +128,10 @@ export default function DashboardLayout() {
               {darkMode ? <Sun size={18} /> : <Moon size={18} />}
             </button>
             <div className="text-right hidden sm:block">
-              <p className="text-sm font-medium text-gray-800 dark:text-gray-100">{profile?.full_name}</p>
-              <p className="text-xs text-gray-400 capitalize">{profile?.role}</p>
+              <p className="text-sm font-medium text-gray-800 dark:text-gray-100">
+                {profile?.role === 'super_admin' ? 'Super Admin' : (profile?.full_name || '')}
+              </p>
+              <p className="text-xs text-gray-400 capitalize">{profile?.role?.replace('_', ' ')}</p>
             </div>
             <button onClick={handleLogout} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800" title="Log out">
               <LogOut size={18} />
@@ -119,6 +143,7 @@ export default function DashboardLayout() {
         </main>
       </div>
       <CalculatorModal open={calcOpen} onClose={() => setCalcOpen(false)} />
+      </div>
     </div>
   )
 }
