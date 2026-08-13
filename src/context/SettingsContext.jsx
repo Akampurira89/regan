@@ -60,21 +60,17 @@ const DEFAULT_COMPANY = {
 }
 
 export function SettingsProvider({ children }) {
-  const { profile } = useAuth()
-  const tenantId = profile?.tenantId || null
+  const { activeTenantId } = useAuth()
 
   const [template, setTemplate] = useState(DEFAULT_TEMPLATE)
   const [company, setCompany] = useState(DEFAULT_COMPANY)
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('eddyk_dark') === '1')
   const [loading, setLoading] = useState(true)
 
-  // Re-fetches whenever the logged-in tenant changes (login, logout, or a super
-  // admin viewing the app with no shop context at all). Each shop only ever
-  // sees and edits its own branding — never another shop's.
+  // Re-fetches whenever the active tenant changes — normal login/logout, AND
+  // when a super admin steps into or out of "view as this shop" mode.
   const refresh = useCallback(async () => {
-    if (!tenantId) {
-      // No shop context (logged out, or super admin) — just use safe defaults,
-      // nothing to fetch or write.
+    if (!activeTenantId) {
       setTemplate(DEFAULT_TEMPLATE)
       setCompany(DEFAULT_COMPANY)
       setLoading(false)
@@ -92,7 +88,7 @@ export function SettingsProvider({ children }) {
 
     await seedDefaultsIfEmpty()
     setLoading(false)
-  }, [tenantId])
+  }, [activeTenantId])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -110,7 +106,7 @@ export function SettingsProvider({ children }) {
   }, [company.auto_color_rotate, company.accent_color])
 
   const saveTemplate = async (updates) => {
-    if (!tenantId) return
+    if (!activeTenantId) return
     const next = { ...template, ...updates }
     await setDoc(doc(db, ...tPath('settings', 'receiptTemplate')), next, { merge: true })
     setTemplate(next)
@@ -118,7 +114,7 @@ export function SettingsProvider({ children }) {
   }
 
   const saveCompany = async (updates) => {
-    if (!tenantId) return
+    if (!activeTenantId) return
     const next = { ...company, ...updates }
     await setDoc(doc(db, ...tPath('settings', 'company')), next, { merge: true })
     setCompany(next)
