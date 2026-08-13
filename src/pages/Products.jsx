@@ -27,6 +27,7 @@ export default function Products() {
   const [newCategoryName, setNewCategoryName] = useState('')
   const [adjustModal, setAdjustModal] = useState(null)
   const [adjustQty, setAdjustQty] = useState('')
+  const [adjustDirection, setAdjustDirection] = useState('add')
   const [adjustReason, setAdjustReason] = useState('adjustment')
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState(emptyForm)
@@ -91,8 +92,9 @@ export default function Products() {
 
   const submitAdjustment = async (e) => {
     e.preventDefault()
-    const qty = Number(adjustQty)
-    if (!qty) return
+    const magnitude = Math.abs(Number(adjustQty))
+    if (!magnitude) return
+    const qty = adjustDirection === 'remove' ? -magnitude : magnitude
     const product = adjustModal
     await updateDoc(doc(db, ...tPath('products', product.id)), { stock_qty: product.stock_qty + qty })
     await addDoc(collection(db, ...tPath('stockMovements')), {
@@ -100,7 +102,7 @@ export default function Products() {
       notes: 'Manual adjustment via Products page', created_at: serverTimestamp(),
     })
     await logAudit({ userId: profile?.id, action: 'stock_adjustment', entityType: 'products', entityId: product.id, newValues: { change_qty: qty, reason: adjustReason } })
-    setAdjustModal(null); setAdjustQty('')
+    setAdjustModal(null); setAdjustQty(''); setAdjustDirection('add')
     load()
   }
 
@@ -244,10 +246,54 @@ export default function Products() {
         </form>
       </Modal>
 
-      <Modal open={!!adjustModal} onClose={() => setAdjustModal(null)} title={`Adjust Stock: ${adjustModal?.name || ''}`}>
+      <Modal open={!!adjustModal} onClose={() => { setAdjustModal(null); setAdjustDirection('add') }} title={`Adjust Stock: ${adjustModal?.name || ''}`}>
         <form onSubmit={submitAdjustment}>
           <p className="text-sm text-gray-500 mb-3">Current stock: <strong>{adjustModal?.stock_qty}</strong> {adjustModal?.unit}</p>
-          <Input label="Quantity change (use negative to remove, e.g. -2)" type="number" required value={adjustQty} onChange={(e) => setAdjustQty(e.target.value)} />
+
+          {/* Add/Remove toggle instead of typing a minus sign — phone keypads often
+              don't show one, so this avoids that entirely. */}
+          <label className="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-1">Direction</label>
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <button
+              type="button"
+              onClick={() => setAdjustDirection('add')}
+              className={`py-2.5 rounded-lg text-sm font-medium border-2 transition-colors ${
+                adjustDirection === 'add'
+                  ? 'bg-green-50 border-green-500 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                  : 'border-gray-200 dark:border-gray-700 text-gray-500'
+              }`}
+            >
+              + Add Stock
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdjustDirection('remove')}
+              className={`py-2.5 rounded-lg text-sm font-medium border-2 transition-colors ${
+                adjustDirection === 'remove'
+                  ? 'bg-red-50 border-red-500 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                  : 'border-gray-200 dark:border-gray-700 text-gray-500'
+              }`}
+            >
+              − Remove Stock
+            </button>
+          </div>
+
+          <Input
+            label="Quantity"
+            type="number"
+            inputMode="numeric"
+            min="0"
+            required
+            value={adjustQty}
+            onChange={(e) => setAdjustQty(e.target.value.replace('-', ''))}
+          />
+
+          {adjustQty && (
+            <p className={`text-xs mb-3 -mt-2 ${adjustDirection === 'remove' ? 'text-red-600' : 'text-green-600'}`}>
+              New stock will be: <strong>{(adjustModal?.stock_qty || 0) + (adjustDirection === 'remove' ? -Math.abs(Number(adjustQty)) : Math.abs(Number(adjustQty)))}</strong> {adjustModal?.unit}
+            </p>
+          )}
+
           <Select label="Reason" value={adjustReason} onChange={(e) => setAdjustReason(e.target.value)}>
             <option value="adjustment">Manual adjustment</option>
             <option value="damage">Damaged / written off</option>
@@ -255,7 +301,7 @@ export default function Products() {
             <option value="recount">Stock recount</option>
           </Select>
           <div className="flex justify-end gap-2 mt-2">
-            <Button type="button" variant="secondary" onClick={() => setAdjustModal(null)}>Cancel</Button>
+            <Button type="button" variant="secondary" onClick={() => { setAdjustModal(null); setAdjustDirection('add') }}>Cancel</Button>
             <Button type="submit">Apply Adjustment</Button>
           </div>
         </form>
