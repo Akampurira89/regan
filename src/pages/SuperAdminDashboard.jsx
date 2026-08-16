@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore'
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth'
-import { db, secondaryAuth } from '../lib/firebase'
+import { auth, db, secondaryAuth } from '../lib/firebase'
 import { useAuth } from '../context/AuthContext'
 import { Store, CheckCircle2, XCircle, Search, Plus, LogOut, Sparkles, Pencil, Trash2, ExternalLink } from 'lucide-react'
 
@@ -45,6 +45,7 @@ export default function SuperAdminDashboard() {
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
 
   const load = async () => {
     setLoading(true)
@@ -134,20 +135,45 @@ export default function SuperAdminDashboard() {
     load()
   }
 
-  // ---- Delete Shop (Firestore side — Auth login must still be removed manually, see note in modal) ----
-  const openDelete = (t) => { setDeleteTarget(t); setDeleteConfirmText('') }
+  // ---- Delete Shop — fully: Firestore records AND the actual login accounts ----
+  const openDelete = (t) => { setDeleteTarget(t); setDeleteConfirmText(''); setDeleteError('') }
 
   const confirmDelete = async () => {
     if (deleteConfirmText !== deleteTarget.shopName) return
     setDeleting(true)
+    setDeleteError('')
     try {
       const profilesSnap = await getDocs(collection(db, 'tenants', deleteTarget.id, 'profiles'))
-      for (const p of profilesSnap.docs) {
-        await deleteDoc(doc(db, 'tenants', deleteTarget.id, 'profiles', p.id))
-        await deleteDoc(doc(db, 'userTenants', p.id))
+      const uids = profilesSnap.docs.map((p) => p.id)
+
+      // Delete the actual login accounts first, via the secure server function.
+      // If this fails (e.g. server not configured yet), we still proceed to
+      // clean up Firestore — worst case, a login is left over and needs
+      // removing manually in Firebase Console, same as before.
+      if (uids.length > 0) {
+        try {
+          const token = await auth.currentUser.getIdToken()
+          const res = await fetch('/api/deleteAuthUser', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ uids }),
+          })
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}))
+            setDeleteError(`Shop data was deleted, but login accounts may not have been fully removed (${body.error || res.status}). You can clean those up manually in Firebase Console → Authentication if needed.`)
+          }
+        } catch {
+          setDeleteError('Shop data was deleted, but login accounts could not be reached. You can remove them manually in Firebase Console → Authentication if needed.')
+        }
+      }
+
+      for (const uid of uids) {
+        await deleteDoc(doc(db, 'tenants', deleteTarget.id, 'profiles', uid))
+        await deleteDoc(doc(db, 'userTenants', uid))
       }
       await deleteDoc(doc(db, 'tenants', deleteTarget.id))
-      setDeleteTarget(null)
+
+      if (!deleteError) setDeleteTarget(null)
       load()
     } finally {
       setDeleting(false)
@@ -237,7 +263,6 @@ export default function SuperAdminDashboard() {
         </div>
       </div>
 
-      {/* Add Shop modal */}
       {addOpen && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-sm p-6">
@@ -264,7 +289,6 @@ export default function SuperAdminDashboard() {
         </div>
       )}
 
-      {/* Edit Shop modal */}
       {editTarget && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-sm p-6">
@@ -298,7 +322,6 @@ export default function SuperAdminDashboard() {
         </div>
       )}
 
-      {/* Delete Shop modal */}
       {deleteTarget && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl w-full max-w-sm p-6">
@@ -309,11 +332,11 @@ export default function SuperAdminDashboard() {
               <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">Delete "{deleteTarget.shopName}"?</h2>
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
-              This permanently deletes the shop record and all its staff profiles. This cannot be undone.
+              This permanently deletes the shop, its staff profiles, AND their login accounts. Their email addresses become free to reuse immediately. This cannot be undone.
             </p>
-            <p className="text-xs text-amber-600 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 rounded-lg mb-3">
-              Note: staff login accounts (Firebase Authentication) aren't deleted here — remove those separately in Firebase Console → Authentication if you want the emails free to reuse.
-            </p>
+            {deleteError && (
+              <p className="text-xs text-amber-700 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 rounded-lg mb-3">{deleteError}</p>
+            )}
             <label className="text-xs text-gray-500 dark:text-gray-400">
               Type <strong>{deleteTarget.shopName}</strong> to confirm:
             </label>
