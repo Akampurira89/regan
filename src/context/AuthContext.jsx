@@ -15,6 +15,22 @@ export const ROLE_PERMISSIONS = {
   technician: ['dashboard'],
 }
 
+// Mirrors the exact same logic enforced server-side in firestore.rules
+// (tenantIsPaidUp). This copy exists ONLY to show a clear, friendly message —
+// the actual access control that can't be bypassed lives in the rules.
+function isTenantPaidUp(tenant) {
+  if (!tenant) return false
+  const now = Date.now()
+  if (tenant.subscriptionStatus === 'active') {
+    if (!tenant.nextBillingDate) return true
+    return tenant.nextBillingDate.toMillis() > now
+  }
+  if (tenant.subscriptionStatus === 'trial') {
+    return !!tenant.trialEndsAt && tenant.trialEndsAt.toMillis() > now
+  }
+  return false
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
@@ -22,9 +38,7 @@ export function AuthProvider({ children }) {
   const [blockedReason, setBlockedReason] = useState(null)
   const watchersRef = useRef([])
 
-  // Super admin "view as this shop" mode. Not persisted — always starts fresh
-  // from Manage Clients each session, so nobody's left inside a shop by accident.
-  const [viewingAs, setViewingAs] = useState(null) // { tenantId, shopName } | null
+  const [viewingAs, setViewingAs] = useState(null)
 
   const clearWatchers = () => {
     watchersRef.current.forEach((unsub) => unsub())
@@ -45,6 +59,8 @@ export function AuthProvider({ children }) {
     if (!linkSnap.exists()) {
       setProfile(null)
       setTenantId(null)
+      setBlockedReason('no_access')
+      await signOut(auth)
       return
     }
     const link = linkSnap.data()
@@ -59,9 +75,10 @@ export function AuthProvider({ children }) {
     setTenantId(link.tenantId)
 
     const tenantSnap = await getDoc(doc(db, 'tenants', link.tenantId))
-    if (!tenantSnap.exists() || tenantSnap.data().subscriptionStatus !== 'active') {
+    const tenantData = tenantSnap.exists() ? tenantSnap.data() : null
+    if (!isTenantPaidUp(tenantData)) {
       setProfile(null)
-      setBlockedReason('suspended')
+      setBlockedReason(tenantData?.subscriptionStatus === 'trial' ? 'trial_expired' : 'suspended')
       await signOut(auth)
       return
     }
@@ -84,12 +101,18 @@ export function AuthProvider({ children }) {
       }
     })
     const unsubTenant = onSnapshot(doc(db, 'tenants', link.tenantId), (s) => {
-      if (!s.exists() || s.data().subscriptionStatus !== 'active') {
-        setBlockedReason('suspended')
+      if (!isTenantPaidUp(s.exists() ? s.data() : null)) {
+        setBlockedReason(s.exists() && s.data().subscriptionStatus === 'trial' ? 'trial_expired' : 'suspended')
         signOut(auth)
       }
     })
-    watchersRef.current = [unsubProfile, unsubTenant]
+    const unsubLink = onSnapshot(doc(db, 'userTenants', uid), (s) => {
+      if (!s.exists()) {
+        setBlockedReason('no_access')
+        signOut(auth)
+      }
+    })
+    watchersRef.current = [unsubProfile, unsubTenant, unsubLink]
   }, [])
 
   useEffect(() => {
@@ -122,8 +145,6 @@ export function AuthProvider({ children }) {
     setTenantId(null)
   }
 
-  // Lets a super admin step into a specific shop and see/use it exactly like
-  // that shop's own admin would — same pages, same data, same permissions.
   const viewAsShop = (tenantId, shopName) => {
     if (profile?.role !== 'super_admin') return
     setTenantId(tenantId)
@@ -135,14 +156,10 @@ export function AuthProvider({ children }) {
     setViewingAs(null)
   }
 
-  // The tenant currently "in effect" for data access: the shop staff's own
-  // tenant, OR whichever shop a super admin is currently viewing, OR none.
   const activeTenantId = profile?.role === 'super_admin' ? (viewingAs?.tenantId || null) : (profile?.tenantId || null)
 
   const can = (pageKey) => {
     if (profile?.role === 'super_admin') {
-      // Full access to every shop page while viewing a shop, same as that
-      // shop's own admin would have. No access to shop pages otherwise.
       return !!viewingAs
     }
     if (!profile) return false
