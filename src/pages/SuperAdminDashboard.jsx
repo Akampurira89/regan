@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore'
+import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, Timestamp } from 'firebase/firestore'
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth'
 import { auth, db, secondaryAuth } from '../lib/firebase'
 import { useAuth } from '../context/AuthContext'
-import { Store, CheckCircle2, XCircle, Search, Plus, LogOut, Sparkles, Pencil, Trash2, ExternalLink } from 'lucide-react'
+import { Store, CheckCircle2, XCircle, Search, Plus, LogOut, Sparkles, Pencil, Trash2, ExternalLink, Clock } from 'lucide-react'
+
+const TRIAL_DAYS = 30
+const MONTHLY_FEE = 50000
 
 const STATUS_STYLES = {
   active: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400',
@@ -25,6 +28,24 @@ const avatarGradient = (name = '') => {
 
 const slugify = (s) =>
   s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+
+const addDays = (date, days) => new Date(date.getTime() + days * 24 * 60 * 60 * 1000)
+
+function statusLabel(t) {
+  const now = Date.now()
+  if (t.subscriptionStatus === 'trial' && t.trialEndsAt) {
+    const daysLeft = Math.ceil((t.trialEndsAt.toMillis() - now) / 86400000)
+    if (daysLeft > 0) return { text: `Trial · ${daysLeft}d left`, style: STATUS_STYLES.trial }
+    return { text: 'Trial expired', style: STATUS_STYLES.expired }
+  }
+  if (t.subscriptionStatus === 'active') {
+    if (t.nextBillingDate && t.nextBillingDate.toMillis() < now) {
+      return { text: 'Payment overdue', style: STATUS_STYLES.expired }
+    }
+    return { text: 'Active', style: STATUS_STYLES.active }
+  }
+  return { text: 'Suspended', style: STATUS_STYLES.expired }
+}
 
 const emptyAddForm = { shopName: '', ownerName: '', plan: 'standard', adminEmail: '', adminPassword: '' }
 
@@ -61,19 +82,36 @@ export default function SuperAdminDashboard() {
     return tenants.filter((t) => t.shopName?.toLowerCase().includes(q) || t.ownerName?.toLowerCase().includes(q))
   }, [tenants, search])
 
-  const stats = useMemo(() => ({
-    total: tenants.length,
-    active: tenants.filter((t) => t.subscriptionStatus === 'active').length,
-    expired: tenants.filter((t) => t.subscriptionStatus === 'expired').length,
-  }), [tenants])
+  const stats = useMemo(() => {
+    const now = Date.now()
+    let active = 0, needsAttention = 0
+    tenants.forEach((t) => {
+      const trialValid = t.subscriptionStatus === 'trial' && t.trialEndsAt && t.trialEndsAt.toMillis() > now
+      const billingValid = t.subscriptionStatus === 'active' && (!t.nextBillingDate || t.nextBillingDate.toMillis() > now)
+      if (trialValid || billingValid) active++
+      else needsAttention++
+    })
+    return { total: tenants.length, active, needsAttention }
+  }, [tenants])
 
+  // "Suspend" always fully locks a shop out. "Activate" marks this month as
+  // paid and pushes the next billing date exactly 30 days forward from now —
+  // this is what you tap once you've received their 50,000 UGX payment.
   const toggleStatus = async (t) => {
-    const newStatus = t.subscriptionStatus === 'active' ? 'expired' : 'active'
-    await updateDoc(doc(db, 'tenants', t.id), { subscriptionStatus: newStatus })
+    const label = statusLabel(t)
+    const isCurrentlyLocked = label.text === 'Suspended' || label.text.includes('overdue') || label.text.includes('expired')
+    if (isCurrentlyLocked) {
+      await updateDoc(doc(db, 'tenants', t.id), {
+        subscriptionStatus: 'active',
+        nextBillingDate: Timestamp.fromDate(addDays(new Date(), 30)),
+        monthlyFee: MONTHLY_FEE,
+      })
+    } else {
+      await updateDoc(doc(db, 'tenants', t.id), { subscriptionStatus: 'expired' })
+    }
     load()
   }
 
-  // ---- Add Shop ----
   const openAdd = () => { setAddForm(emptyAddForm); setError(''); setAddOpen(true) }
 
   const addShop = async (e) => {
@@ -100,7 +138,10 @@ export default function SuperAdminDashboard() {
       await setDoc(doc(db, 'tenants', tenantId), {
         shopName: addForm.shopName,
         ownerName: addForm.ownerName,
-        subscriptionStatus: 'active',
+        subscriptionStatus: 'trial',
+        trialEndsAt: Timestamp.fromDate(addDays(new Date(), TRIAL_DAYS)),
+        nextBillingDate: null,
+        monthlyFee: MONTHLY_FEE,
         plan: addForm.plan,
         createdAt: new Date(),
       })
@@ -118,7 +159,6 @@ export default function SuperAdminDashboard() {
     }
   }
 
-  // ---- Edit Shop ----
   const openEdit = (t) => {
     setEditTarget(t)
     setEditForm({ shopName: t.shopName || '', ownerName: t.ownerName || '', plan: t.plan || 'standard' })
@@ -135,7 +175,6 @@ export default function SuperAdminDashboard() {
     load()
   }
 
-  // ---- Delete Shop — fully: Firestore records AND the actual login accounts ----
   const openDelete = (t) => { setDeleteTarget(t); setDeleteConfirmText(''); setDeleteError('') }
 
   const confirmDelete = async () => {
@@ -146,10 +185,6 @@ export default function SuperAdminDashboard() {
       const profilesSnap = await getDocs(collection(db, 'tenants', deleteTarget.id, 'profiles'))
       const uids = profilesSnap.docs.map((p) => p.id)
 
-      // Delete the actual login accounts first, via the secure server function.
-      // If this fails (e.g. server not configured yet), we still proceed to
-      // clean up Firestore — worst case, a login is left over and needs
-      // removing manually in Firebase Console, same as before.
       if (uids.length > 0) {
         try {
           const token = await auth.currentUser.getIdToken()
@@ -189,7 +224,7 @@ export default function SuperAdminDashboard() {
               <Sparkles size={13} /> SUPER ADMIN
             </div>
             <h1 className="text-2xl font-bold text-white">Manage Clients</h1>
-            <p className="text-sm text-white/70 mt-0.5">Every shop running on your platform, in one place.</p>
+            <p className="text-sm text-white/70 mt-0.5">Every shop running on your platform &middot; UGX {MONTHLY_FEE.toLocaleString()}/month after a {TRIAL_DAYS}-day free trial</p>
           </div>
           <button onClick={logout} className="flex items-center gap-1.5 text-sm text-white/90 hover:text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors">
             <LogOut size={14} /> Log out
@@ -200,8 +235,8 @@ export default function SuperAdminDashboard() {
       <div className="max-w-5xl mx-auto px-4 sm:px-6 -mt-10 pb-10">
         <div className="grid grid-cols-3 gap-3 mb-6">
           <StatCard icon={Store} label="Total Shops" value={stats.total} color="text-blue-600 bg-blue-50 dark:bg-blue-900/30" />
-          <StatCard icon={CheckCircle2} label="Active" value={stats.active} color="text-green-600 bg-green-50 dark:bg-green-900/30" />
-          <StatCard icon={XCircle} label="Suspended" value={stats.expired} color="text-red-600 bg-red-50 dark:bg-red-900/30" />
+          <StatCard icon={CheckCircle2} label="Active / On Trial" value={stats.active} color="text-green-600 bg-green-50 dark:bg-green-900/30" />
+          <StatCard icon={XCircle} label="Needs Attention" value={stats.needsAttention} color="text-red-600 bg-red-50 dark:bg-red-900/30" />
         </div>
 
         <div className="flex flex-wrap items-center gap-3 mb-4">
@@ -229,35 +264,40 @@ export default function SuperAdminDashboard() {
             </div>
           ) : (
             <div className="divide-y divide-gray-100 dark:divide-gray-800">
-              {filtered.map((t) => (
-                <div key={t.id} className="flex items-center gap-3 p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
-                  <Link to={`/admin/shop/${t.id}`} className="flex items-center gap-3 flex-1 min-w-0">
-                    <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${avatarGradient(t.shopName)} text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-sm`}>
-                      {(t.shopName || '?').charAt(0).toUpperCase()}
+              {filtered.map((t) => {
+                const label = statusLabel(t)
+                const locked = label.text === 'Suspended' || label.text.includes('overdue') || label.text.includes('expired')
+                return (
+                  <div key={t.id} className="flex items-center gap-3 p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                    <Link to={`/admin/shop/${t.id}`} className="flex items-center gap-3 flex-1 min-w-0">
+                      <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${avatarGradient(t.shopName)} text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-sm`}>
+                        {(t.shopName || '?').charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-semibold text-gray-800 dark:text-gray-100 truncate flex items-center gap-1">
+                          {t.shopName || '-'} <ExternalLink size={11} className="text-gray-300" />
+                        </p>
+                        <p className="text-xs text-gray-400 truncate">{t.ownerName || '-'} &middot; {t.plan || 'standard'}</p>
+                      </div>
+                    </Link>
+                    <span className={`hidden sm:inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium shrink-0 ${label.style}`}>
+                      {label.text.includes('Trial') && <Clock size={11} />}
+                      {label.text}
+                    </span>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button onClick={() => toggleStatus(t)} className="text-xs font-medium text-blue-600 hover:underline px-1.5">
+                        {locked ? 'Activate (mark paid)' : 'Suspend'}
+                      </button>
+                      <button onClick={() => openEdit(t)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600" title="Edit shop details">
+                        <Pencil size={14} />
+                      </button>
+                      <button onClick={() => openDelete(t)} className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-600" title="Delete shop">
+                        <Trash2 size={14} />
+                      </button>
                     </div>
-                    <div className="min-w-0">
-                      <p className="font-semibold text-gray-800 dark:text-gray-100 truncate flex items-center gap-1">
-                        {t.shopName || '-'} <ExternalLink size={11} className="text-gray-300" />
-                      </p>
-                      <p className="text-xs text-gray-400 truncate">{t.ownerName || '-'} &middot; {t.plan || 'standard'}</p>
-                    </div>
-                  </Link>
-                  <span className={`hidden sm:inline-flex px-2.5 py-1 rounded-full text-xs font-medium shrink-0 ${STATUS_STYLES[t.subscriptionStatus] || 'bg-gray-100 text-gray-500'}`}>
-                    {t.subscriptionStatus || 'unknown'}
-                  </span>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={() => toggleStatus(t)} className="text-xs font-medium text-blue-600 hover:underline px-1.5">
-                      {t.subscriptionStatus === 'active' ? 'Suspend' : 'Activate'}
-                    </button>
-                    <button onClick={() => openEdit(t)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600" title="Edit shop details">
-                      <Pencil size={14} />
-                    </button>
-                    <button onClick={() => openDelete(t)} className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-600" title="Delete shop">
-                      <Trash2 size={14} />
-                    </button>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>
@@ -272,6 +312,9 @@ export default function SuperAdminDashboard() {
               </div>
               <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">Add New Shop</h2>
             </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+              Starts with a {TRIAL_DAYS}-day free trial. After that, it'll show as needing payment until you mark it Activated.
+            </p>
             <form onSubmit={addShop} className="space-y-3">
               <Field label="Shop Name" value={addForm.shopName} onChange={(v) => setAddForm({ ...addForm, shopName: v })} />
               <Field label="Owner's Name" value={addForm.ownerName} onChange={(v) => setAddForm({ ...addForm, ownerName: v })} />
