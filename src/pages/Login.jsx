@@ -8,6 +8,8 @@ import { Button, Input, Card } from '../components/ui/ui'
 const BLOCK_MESSAGES = {
   disabled: 'Your account has been disabled. Please contact your shop admin.',
   suspended: "This shop's subscription is not active. Please contact the platform owner.",
+  trial_expired: 'Your free trial has ended. Please contact the platform owner to activate your subscription (UGX 50,000/month).',
+  no_access: 'This account no longer has access to any shop. Please contact the platform owner.',
 }
 
 export default function Login() {
