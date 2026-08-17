@@ -1,12 +1,28 @@
 import { useEffect, useState } from 'react'
 import { Printer, Search, Undo2, HandCoins, Pencil, Trash2, Plus } from 'lucide-react'
 import { collection, getDocs, query, orderBy, limit, doc, runTransaction, where } from 'firebase/firestore'
-import { db } from '../../lib/firebase'
+import { db, tPath } from '../../lib/firebase'
+import { startOfDay, startOfWeek, startOfMonth } from 'date-fns'
 import { Card, Button, Input, Modal, EmptyState, Badge } from '../../components/ui/ui'
 import { formatMoney, formatDate, logAudit } from '../../utils/helpers'
 import { useSettings } from '../../context/SettingsContext'
 import { useAuth } from '../../context/AuthContext'
 import ReceiptView from './ReceiptView'
+
+const PERIODS = [
+  { key: 'all', label: 'All Time' },
+  { key: 'today', label: 'Today' },
+  { key: 'week', label: 'This Week' },
+  { key: 'month', label: 'This Month' },
+]
+
+function periodCutoff(period) {
+  const now = new Date()
+  if (period === 'today') return startOfDay(now)
+  if (period === 'week') return startOfWeek(now, { weekStartsOn: 1 })
+  if (period === 'month') return startOfMonth(now)
+  return null
+}
 
 export default function ReceiptHistory() {
   const { company, template } = useSettings()
@@ -25,13 +41,14 @@ export default function ReceiptHistory() {
   const [editPaid, setEditPaid] = useState('0')
   const [products, setProducts] = useState([])
   const [saving, setSaving] = useState(false)
+  const [period, setPeriod] = useState('all')
 
   const load = async () => {
     const [salesSnap, customersSnap, consignSnap, productsSnap] = await Promise.all([
-      getDocs(query(collection(db, 'sales'), orderBy('created_at', 'desc'), limit(200))),
-      getDocs(collection(db, 'customers')),
-      getDocs(query(collection(db, 'consignmentItems'), where('status', 'in', ['sold', 'paid']))),
-      getDocs(collection(db, 'products')),
+      getDocs(query(collection(db, ...tPath('sales')), orderBy('created_at', 'desc'), limit(200))),
+      getDocs(collection(db, ...tPath('customers'))),
+      getDocs(query(collection(db, ...tPath('consignmentItems')), where('status', 'in', ['sold', 'paid']))),
+      getDocs(collection(db, ...tPath('products'))),
     ])
     const customerMap = Object.fromEntries(customersSnap.docs.map((d) => [d.id, d.data()]))
     setSales(salesSnap.docs.map((d) => ({ id: d.id, ...d.data(), customer: customerMap[d.data().customer_id] })))
@@ -46,10 +63,17 @@ export default function ReceiptHistory() {
     ...consignSales.map((c) => ({ kind: 'consignment', id: c.id, date: c.sold_at, label: c.description, customerName: c.customer_name || 'Walk-in', amount: c.sale_amount, raw: c })),
   ].sort((a, b) => (b.date?.seconds || 0) - (a.date?.seconds || 0))
 
-  const filtered = combined.filter((row) => !search || row.label?.toLowerCase().includes(search.toLowerCase()) || row.customerName?.toLowerCase().includes(search.toLowerCase()))
+  const filtered = combined.filter((row) => {
+    const matchesSearch = !search || row.label?.toLowerCase().includes(search.toLowerCase()) || row.customerName?.toLowerCase().includes(search.toLowerCase())
+    const cutoff = periodCutoff(period)
+    const matchesPeriod = !cutoff || (row.date?.seconds && row.date.seconds * 1000 >= cutoff.getTime())
+    return matchesSearch && matchesPeriod
+  })
+
+  const periodTotal = filtered.reduce((sum, row) => sum + (Number(row.amount) || 0), 0)
 
   const openReprint = async (sale) => {
-    const itemsSnap = await getDocs(collection(db, 'sales', sale.id, 'items'))
+    const itemsSnap = await getDocs(collection(db, ...tPath('sales', sale.id, 'items')))
     setReprint({ sale, items: itemsSnap.docs.map((d) => ({ id: d.id, ...d.data() })), customer: sale.customer })
   }
 
@@ -57,24 +81,24 @@ export default function ReceiptHistory() {
     if (!confirm(`Reverse sale ${sale.receipt_number}? This restocks all items and cannot be undone. Use this for mistaken or fraudulent sales, even from past days.`)) return
     setVoiding(true)
     try {
-      const itemsSnap = await getDocs(collection(db, 'sales', sale.id, 'items'))
+      const itemsSnap = await getDocs(collection(db, ...tPath('sales', sale.id, 'items')))
       const items = itemsSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
-      const debtSnap = sale.is_credit_sale ? await getDocs(query(collection(db, 'debts'), where('sale_id', '==', sale.id))) : null
+      const debtSnap = sale.is_credit_sale ? await getDocs(query(collection(db, ...tPath('debts')), where('sale_id', '==', sale.id))) : null
 
       await runTransaction(db, async (tx) => {
-        const productRefs = items.map((i) => doc(db, 'products', i.product_id))
+        const productRefs = items.map((i) => doc(db, ...tPath('products', i.product_id)))
         const productSnaps = await Promise.all(productRefs.map((r) => tx.get(r)))
 
-        tx.update(doc(db, 'sales', sale.id), { status: 'void' })
+        tx.update(doc(db, ...tPath('sales', sale.id)), { status: 'void' })
         items.forEach((i, idx) => {
           if (productSnaps[idx].exists()) {
             tx.update(productRefs[idx], { stock_qty: (productSnaps[idx].data().stock_qty || 0) + i.qty })
           }
-          const movementRef = doc(collection(db, 'stockMovements'))
+          const movementRef = doc(collection(db, ...tPath('stockMovements')))
           tx.set(movementRef, { product_id: i.product_id, change_qty: i.qty, reason: 'sale_reversal', reference_id: sale.id })
         })
         if (debtSnap && !debtSnap.empty) {
-          tx.update(doc(db, 'debts', debtSnap.docs[0].id), { status: 'paid', balance: 0 })
+          tx.update(doc(db, ...tPath('debts', debtSnap.docs[0].id)), { status: 'paid', balance: 0 })
         }
       })
 
@@ -88,7 +112,7 @@ export default function ReceiptHistory() {
   }
 
   const openEditSale = async (sale) => {
-    const itemsSnap = await getDocs(collection(db, 'sales', sale.id, 'items'))
+    const itemsSnap = await getDocs(collection(db, ...tPath('sales', sale.id, 'items')))
     const items = itemsSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
     setEditSale(sale)
     setOriginalEditItems(items.map((i) => ({ ...i })))
@@ -119,7 +143,7 @@ export default function ReceiptHistory() {
       ])]
 
       await runTransaction(db, async (tx) => {
-        const productRefs = productIds.map((id) => doc(db, 'products', id))
+        const productRefs = productIds.map((id) => doc(db, ...tPath('products', id)))
         const productSnaps = await Promise.all(productRefs.map((r) => tx.get(r)))
         const stockMap = {}
         productIds.forEach((id, idx) => { stockMap[id] = productSnaps[idx].exists() ? (productSnaps[idx].data().stock_qty || 0) : 0 })
@@ -129,16 +153,16 @@ export default function ReceiptHistory() {
 
         productIds.forEach((id, idx) => tx.update(productRefs[idx], { stock_qty: stockMap[id] }))
 
-        originalEditItems.forEach((i) => tx.delete(doc(db, 'sales', editSale.id, 'items', i.id)))
+        originalEditItems.forEach((i) => tx.delete(doc(db, ...tPath('sales', editSale.id, 'items', i.id))))
         editItems.forEach((i) => {
-          const ref = doc(collection(db, 'sales', editSale.id, 'items'))
+          const ref = doc(collection(db, ...tPath('sales', editSale.id, 'items')))
           tx.set(ref, {
             product_id: i.product_id || null, product_name: i.product_name, serial_number: i.serial_number || null,
             qty: Number(i.qty), rate: Number(i.rate), amount: Number(i.qty) * Number(i.rate), cost_price: i.cost_price || 0,
           })
         })
 
-        tx.update(doc(db, 'sales', editSale.id), {
+        tx.update(doc(db, ...tPath('sales', editSale.id)), {
           subtotal: editItems.reduce((s, i) => s + Number(i.rate) * Number(i.qty), 0),
           discount: Number(editDiscount) || 0, total: newTotal, amount_paid: paid, balance_due: newBalanceDue,
           is_credit_sale: newBalanceDue > 0,
@@ -146,9 +170,9 @@ export default function ReceiptHistory() {
       })
 
       if (editSale.is_credit_sale) {
-        const debtSnap = await getDocs(query(collection(db, 'debts'), where('sale_id', '==', editSale.id)))
+        const debtSnap = await getDocs(query(collection(db, ...tPath('debts')), where('sale_id', '==', editSale.id)))
         if (!debtSnap.empty) {
-          const debtRef = doc(db, 'debts', debtSnap.docs[0].id)
+          const debtRef = doc(db, ...tPath('debts', debtSnap.docs[0].id))
           await runTransaction(db, async (tx) => {
             tx.update(debtRef, { original_amount: newTotal, balance: newBalanceDue, status: newBalanceDue === 0 ? 'paid' : 'partially_paid' })
           })
@@ -167,6 +191,26 @@ export default function ReceiptHistory() {
 
   return (
     <Card title="Sales History (incl. Consignment)">
+      <div className="flex flex-wrap gap-2 mb-3">
+        {PERIODS.map((p) => (
+          <button
+            key={p.key}
+            onClick={() => setPeriod(p.key)}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+              period === p.key
+                ? 'bg-brand text-white'
+                : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      {!loading && filtered.length > 0 && (
+        <p className="text-xs text-gray-400 mb-3">
+          {filtered.length} record{filtered.length !== 1 ? 's' : ''} &middot; Total: <strong className="text-gray-600 dark:text-gray-300">{formatMoney(periodTotal, company.currency)}</strong>
+        </p>
+      )}
       <div className="relative mb-3 max-w-sm">
         <Search size={16} className="absolute left-3 top-2.5 text-gray-400" />
         <input className="w-full pl-9 pr-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 text-sm" placeholder="Search by receipt #, item, or customer" value={search} onChange={(e) => setSearch(e.target.value)} />
