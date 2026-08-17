@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Plus, HandCoins, CheckCircle2, Wallet } from 'lucide-react'
 import { collection, getDocs, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { Button, Card, Input, Textarea, Modal, EmptyState, Badge } from '../components/ui/ui'
 import { formatMoney, formatDate, logAudit } from '../utils/helpers'
 import { useAuth } from '../context/AuthContext'
@@ -23,7 +23,7 @@ export default function Consignment() {
 
   const load = async () => {
     setLoading(true)
-    const snap = await getDocs(collection(db, 'consignmentItems'))
+    const snap = await getDocs(collection(db, ...tPath('consignmentItems')))
     setItems(snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.created_at?.seconds || 0) - (a.created_at?.seconds || 0)))
     setLoading(false)
   }
@@ -35,7 +35,7 @@ export default function Consignment() {
       description: form.description, owner_name: form.owner_name, owner_phone: form.owner_phone,
       owner_amount: Number(form.owner_amount) || 0, status: 'available', created_at: serverTimestamp(),
     }
-    const ref = await addDoc(collection(db, 'consignmentItems'), payload)
+    const ref = await addDoc(collection(db, ...tPath('consignmentItems')), payload)
     await logAudit({ userId: profile?.id, action: 'create', entityType: 'consignmentItems', entityId: ref.id, newValues: payload })
     setAddModalOpen(false); setForm(empty)
     load()
@@ -45,7 +45,7 @@ export default function Consignment() {
     e.preventDefault()
     const amount = Number(saleAmount)
     if (!amount) return
-    await updateDoc(doc(db, 'consignmentItems', sellModal.id), {
+    await updateDoc(doc(db, ...tPath('consignmentItems', sellModal.id)), {
       status: 'sold', sale_amount: amount, customer_name: saleCustomer, sold_at: serverTimestamp(),
     })
     await logAudit({ userId: profile?.id, action: 'update', entityType: 'consignmentItems', entityId: sellModal.id, newValues: { status: 'sold', sale_amount: amount } })
@@ -55,8 +55,8 @@ export default function Consignment() {
 
   const markPaid = async (item) => {
     if (!confirm(`Confirm you've paid ${item.owner_name} ${formatMoney(item.owner_amount, company.currency)} for "${item.description}"?`)) return
-    await updateDoc(doc(db, 'consignmentItems', item.id), { status: 'paid', paid_at: serverTimestamp() })
-    await addDoc(collection(db, 'payments'), { reference_type: 'consignment_owner', reference_id: item.id, amount: item.owner_amount, method: 'cash', received_by: profile?.id, created_at: serverTimestamp() })
+    await updateDoc(doc(db, ...tPath('consignmentItems', item.id)), { status: 'paid', paid_at: serverTimestamp() })
+    await addDoc(collection(db, ...tPath('payments')), { reference_type: 'consignment_owner', reference_id: item.id, amount: item.owner_amount, method: 'cash', received_by: profile?.id, created_at: serverTimestamp() })
     await logAudit({ userId: profile?.id, action: 'payment', entityType: 'consignmentItems', entityId: item.id, newValues: { amount: item.owner_amount } })
     load()
   }
