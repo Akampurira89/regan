@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Plus, Landmark, Wallet, ArrowRightLeft } from 'lucide-react'
 import { collection, getDocs, addDoc, query, orderBy, serverTimestamp } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { Card, Button, Input, Select, Textarea, Modal, EmptyState, StatCard } from '../components/ui/ui'
 import { formatMoney, formatDate, logAudit } from '../utils/helpers'
 import { useAuth } from '../context/AuthContext'
@@ -22,7 +22,7 @@ export default function CashBank() {
 
   const load = async () => {
     setLoading(true)
-    const snap = await getDocs(query(collection(db, 'cashBankLedger'), orderBy('created_at', 'desc')))
+    const snap = await getDocs(query(collection(db, ...tPath('cashBankLedger')), orderBy('created_at', 'desc')))
     setEntries(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
     setLoading(false)
   }
@@ -40,7 +40,7 @@ export default function CashBank() {
     const amount = Number(form.amount)
     if (!amount || amount <= 0) return
     const payload = { direction: form.direction, amount, note: form.note, created_by: profile?.id, created_at: serverTimestamp() }
-    const ref = await addDoc(collection(db, 'cashBankLedger'), payload)
+    const ref = await addDoc(collection(db, ...tPath('cashBankLedger')), payload)
     await logAudit({ userId: profile?.id, action: 'create', entityType: 'cashBankLedger', entityId: ref.id, newValues: payload })
     setModalOpen(false); setForm(empty)
     load()
