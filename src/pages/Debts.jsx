@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { CreditCard, MessageCircle, Send } from 'lucide-react'
 import { collection, getDocs, addDoc, updateDoc, doc, query, where, serverTimestamp } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 import { Card, Button, Input, Select, Modal, EmptyState, Badge } from '../components/ui/ui'
 import { formatMoney, formatDate, daysBetween, logAudit } from '../utils/helpers'
 import { openWhatsApp, debtReminderMessage, sendSMS, smsConfigured } from '../utils/notifications'
@@ -20,9 +20,9 @@ export default function Debts() {
   const load = async () => {
     setLoading(true)
     const [dSnap, cSnap, sSnap] = await Promise.all([
-      getDocs(query(collection(db, 'debts'), where('status', '!=', 'paid'))),
-      getDocs(collection(db, 'customers')),
-      getDocs(collection(db, 'sales')),
+      getDocs(query(collection(db, ...tPath('debts')), where('status', '!=', 'paid'))),
+      getDocs(collection(db, ...tPath('customers'))),
+      getDocs(collection(db, ...tPath('sales'))),
     ])
     const customerMap = Object.fromEntries(cSnap.docs.map((d) => [d.id, d.data()]))
     const saleMap = Object.fromEntries(sSnap.docs.map((d) => [d.id, d.data()]))
@@ -43,8 +43,8 @@ export default function Debts() {
     const debt = payModal
     const newPaid = Number(debt.amount_paid) + amount
     const newBalance = Math.max(0, Number(debt.original_amount) - newPaid)
-    await updateDoc(doc(db, 'debts', debt.id), { amount_paid: newPaid, balance: newBalance, status: newBalance === 0 ? 'paid' : 'partially_paid' })
-    await addDoc(collection(db, 'payments'), { reference_type: 'debt', reference_id: debt.id, amount, method: payMethod, received_by: profile?.id, created_at: serverTimestamp() })
+    await updateDoc(doc(db, ...tPath('debts', debt.id)), { amount_paid: newPaid, balance: newBalance, status: newBalance === 0 ? 'paid' : 'partially_paid' })
+    await addDoc(collection(db, ...tPath('payments')), { reference_type: 'debt', reference_id: debt.id, amount, method: payMethod, received_by: profile?.id, created_at: serverTimestamp() })
     await logAudit({ userId: profile?.id, action: 'payment', entityType: 'debts', entityId: debt.id, newValues: { amount } })
     setPayModal(null); setPayAmount('')
     load()
