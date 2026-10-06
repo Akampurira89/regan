@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Search, Plus, Minus, Trash2, ShoppingCart, X, ScanLine, ClipboardCheck } from 'lucide-react'
 import { collection, getDocs, addDoc, doc, updateDoc, increment, runTransaction, serverTimestamp } from 'firebase/firestore'
 import { db, tPath } from '../lib/firebase'
@@ -28,6 +28,7 @@ export default function Sales() {
   const [notes, setNotes] = useState('')
   const [lastSale, setLastSale] = useState(null)
   const [processing, setProcessing] = useState(false)
+  const processingRef = useRef(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [redeemPoints, setRedeemPoints] = useState('0')
 
@@ -74,9 +75,9 @@ export default function Sales() {
   const redeemDiscount = Math.min(Number(redeemPoints) || 0, maxRedeemable) * POINT_VALUE
 
   const subtotal = cart.reduce((s, i) => s + i.rate * i.qty, 0)
-  const discountAmt = (Number(discount) || 0) + redeemDiscount
+  const discountAmt = Math.min(subtotal, Math.max(0, Number(discount) || 0) + redeemDiscount)
   const total = Math.max(0, subtotal - discountAmt)
-  const paid = isCredit ? Number(amountPaid) || 0 : total
+  const paid = isCredit ? Math.min(total, Math.max(0, Number(amountPaid) || 0)) : total
   const balanceDue = Math.max(0, total - paid)
 
   const resetSaleForm = () => {
@@ -92,24 +93,29 @@ export default function Sales() {
   }
 
   const checkout = async () => {
+    if (processingRef.current) return // blocks double-taps instantly
+    if (!navigator.onLine) { alert('No internet connection. This needs internet so stock and balances stay exact. Please reconnect and try again.'); return }
     if (company.min_sale_amount > 0 && total < company.min_sale_amount) {
       const proceed = confirm(`This sale (${formatMoney(total, company.currency)}) is below your minimum sale amount of ${formatMoney(company.min_sale_amount, company.currency)}. Continue anyway?`)
       if (!proceed) return
     }
     const isNewCustomer = !customerId && !!newCustomerName.trim()
+    processingRef.current = true
     setProcessing(true)
     try {
       let finalCustomerId = customerId || null
       let finalCustomer = customers.find((c) => c.id === customerId) || null
-      if (isNewCustomer) {
-        const custRef = await addDoc(collection(db, ...tPath('customers')), { name: newCustomerName.trim(), phone: newCustomerPhone.trim(), loyalty_points: 0, created_at: serverTimestamp() })
-        finalCustomerId = custRef.id
-        finalCustomer = { id: custRef.id, name: newCustomerName.trim(), phone: newCustomerPhone.trim() }
+      // The new customer is created INSIDE the transaction below, so a failed
+      // checkout never leaves behind a stray/duplicate customer.
+      const newCustomerRef = isNewCustomer ? doc(collection(db, ...tPath('customers'))) : null
+      if (newCustomerRef) {
+        finalCustomerId = newCustomerRef.id
+        finalCustomer = { id: newCustomerRef.id, name: newCustomerName.trim(), phone: newCustomerPhone.trim() }
       }
 
-      const receiptNumber = await generateSequenceNumber('RCT', 'sales')
+      const receiptNumber = await generateSequenceNumber('RCT', tPath('sales'))
       const saleData = {
-        receipt_number: receiptNumber, customer_id: finalCustomerId, cashier_id: profile?.id,
+        receipt_number: receiptNumber, customer_id: finalCustomerId, cashier_id: profile?.id ?? null,
         subtotal, discount: discountAmt, tax_amount: 0, total,
         amount_paid: paid, balance_due: balanceDue, payment_method: paymentMethod,
         is_credit_sale: isCredit && balanceDue > 0, status: 'completed', notes,
@@ -125,12 +131,15 @@ export default function Sales() {
           if (current < cart[idx].qty) throw new Error(`Not enough stock for ${cart[idx].product.name}`)
         })
 
+        if (newCustomerRef) {
+          tx.set(newCustomerRef, { name: newCustomerName.trim(), phone: newCustomerPhone.trim(), loyalty_points: 0, created_at: serverTimestamp() })
+        }
         tx.set(saleRef, saleData)
         cart.forEach((i, idx) => {
           const itemRef = doc(collection(db, ...tPath('sales', saleRef.id, 'items')))
           tx.set(itemRef, {
             product_id: i.product.id, product_name: i.product.name, serial_number: i.serial || null,
-            qty: i.qty, rate: i.rate, amount: i.rate * i.qty, cost_price: i.product.buying_price,
+            qty: i.qty, rate: i.rate, amount: i.rate * i.qty, cost_price: i.product.buying_price ?? 0,
           })
           tx.update(productRefs[idx], { stock_qty: productSnaps[idx].data().stock_qty - i.qty })
           const movementRef = doc(collection(db, ...tPath('stockMovements')))
@@ -144,21 +153,27 @@ export default function Sales() {
             amount_paid: paid, balance: balanceDue, status: 'open', created_at: serverTimestamp(),
           })
         }
+        // Payment record is saved together with the sale (all or nothing)
+        if (paid > 0) {
+          const payRef = doc(collection(db, ...tPath('payments')))
+          tx.set(payRef, { reference_type: 'sale', reference_id: saleRef.id, amount: paid, method: paymentMethod, received_by: profile?.id ?? null, created_at: serverTimestamp() })
+        }
       })
 
-      if (paid > 0) {
-        await addDoc(collection(db, ...tPath('payments')), { reference_type: 'sale', reference_id: saleRef.id, amount: paid, method: paymentMethod, received_by: profile?.id, created_at: serverTimestamp() })
-      }
-      await logAudit({ userId: profile?.id, action: 'create', entityType: 'sales', entityId: saleRef.id, newValues: { total, receipt_number: receiptNumber } })
-
-      // Loyalty points: deduct whatever was redeemed, award new points earned on this sale
-      if (finalCustomerId) {
-        const redeemed = Math.min(Number(redeemPoints) || 0, maxRedeemable)
-        const earned = Math.floor(total / POINTS_EARN_RATE)
-        const netChange = earned - redeemed
-        if (netChange !== 0) {
-          await updateDoc(doc(db, ...tPath('customers', finalCustomerId)), { loyalty_points: increment(netChange) })
+      // The sale is now safely saved. Anything below is a bonus step and must
+      // never make the cashier think the sale failed (which causes a double sale on retry).
+      try {
+        await logAudit({ userId: profile?.id, action: 'create', entityType: 'sales', entityId: saleRef.id, newValues: { total, receipt_number: receiptNumber } })
+        if (finalCustomerId) {
+          const redeemed = Math.min(Number(redeemPoints) || 0, maxRedeemable)
+          const earned = Math.floor(total / POINTS_EARN_RATE)
+          const netChange = earned - redeemed
+          if (netChange !== 0) {
+            await updateDoc(doc(db, ...tPath('customers', finalCustomerId)), { loyalty_points: increment(netChange) })
+          }
         }
+      } catch (bonusErr) {
+        console.error('Sale saved, but loyalty/audit step failed', bonusErr)
       }
 
       const items = cart.map((i) => ({ product_id: i.product.id, product_name: i.product.name, serial_number: i.serial || null, qty: i.qty, rate: i.rate, amount: i.rate * i.qty }))
@@ -168,8 +183,9 @@ export default function Sales() {
       resetSaleForm()
       load()
     } catch (err) {
-      alert('Checkout failed: ' + err.message)
+      alert('Checkout failed — nothing was saved: ' + err.message)
     } finally {
+      processingRef.current = false
       setProcessing(false)
     }
   }
