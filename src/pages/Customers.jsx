@@ -38,7 +38,11 @@ export default function Customers() {
   const save = async (e) => {
     e.preventDefault()
     if (editing) {
-      await updateDoc(doc(db, ...tPath('customers', editing.id)), form)
+      // Never write loyalty_points from the form: it may be stale and would erase points earned since the page loaded
+      const editable = { ...form }
+      delete editable.id
+      delete editable.loyalty_points
+      await updateDoc(doc(db, ...tPath('customers', editing.id)), editable)
       await logAudit({ userId: profile?.id, action: 'update', entityType: 'customers', entityId: editing.id, newValues: form })
     } else {
       const ref = await addDoc(collection(db, ...tPath('customers')), { ...form, loyalty_points: 0, created_at: serverTimestamp() })
