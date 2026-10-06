@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Plus, Trash2, Pencil } from 'lucide-react'
 import { collection, getDocs, doc, deleteDoc, runTransaction, serverTimestamp } from 'firebase/firestore'
 import { db, tPath } from '../lib/firebase'
@@ -22,6 +22,7 @@ export default function Purchases() {
   const [amountPaid, setAmountPaid] = useState('0')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
 
   const load = async () => {
     setLoading(true)
@@ -60,11 +61,16 @@ export default function Purchases() {
 
   const save = async (e) => {
     e.preventDefault()
+    if (savingRef.current) return // blocks double-taps instantly
+    if (!navigator.onLine) { alert('No internet connection. This needs internet so stock and balances stay exact. Please reconnect and try again.'); return }
     const valid = items.filter((i) => i.product_id && i.qty > 0)
     if (!supplierId) { alert('Please select a supplier.'); return }
     if (valid.length === 0) { alert('Add at least one item with a product and quantity selected.'); return }
+    // Total counts only the rows that are actually saved (rows with no product are ignored)
+    const total = valid.reduce((s, i) => s + Number(i.qty) * Number(i.cost_price), 0)
+    const paid = Math.min(Math.max(0, Number(amountPaid) || 0), total)
+    savingRef.current = true
     setSaving(true)
-    const paid = Number(amountPaid) || 0
 
     try {
       if (editing) {
@@ -79,12 +85,16 @@ export default function Purchases() {
         await runTransaction(db, async (tx) => {
           const productSnaps = await Promise.all(productRefs.map((r) => tx.get(r)))
           const supplierSnap = await tx.get(supplierRef)
+          const purchaseSnap = await tx.get(purchaseRef) // fresh values: supplier payments may have been applied since this screen loaded
 
           const stockMap = {}
           productIds.forEach((id, idx) => { stockMap[id] = productSnaps[idx].exists() ? (productSnaps[idx].data().stock_qty || 0) : 0 })
           originalItems.forEach((i) => { stockMap[i.product_id] -= i.qty })
           valid.forEach((i) => { stockMap[i.product_id] += Number(i.qty) })
 
+          Object.entries(stockMap).forEach(([, qtyLeft]) => {
+            if (qtyLeft < 0) throw new Error('This change would make a product\'s stock negative (some of those units were already sold).')
+          })
           productIds.forEach((id, idx) => tx.update(productRefs[idx], { stock_qty: stockMap[id] }))
           originalItems.forEach((i) => tx.delete(doc(db, ...tPath('purchases', editing.id, 'items', i.id))))
           valid.forEach((i) => {
@@ -92,10 +102,12 @@ export default function Purchases() {
             tx.set(ref, { product_id: i.product_id, qty: Number(i.qty), cost_price: Number(i.cost_price), amount: Number(i.qty) * Number(i.cost_price) })
           })
 
-          const newBalanceDue = Math.max(0, total - paid)
+          const viaPayments = Number(purchaseSnap.data()?.paid_via_payments) || 0 // paid later through the Suppliers page
+          const oldBalanceDue = Number(purchaseSnap.data()?.balance_due) || 0
+          const newBalanceDue = Math.max(0, total - paid - viaPayments)
           tx.update(purchaseRef, { total, amount_paid: paid, balance_due: newBalanceDue })
 
-          const balanceDelta = newBalanceDue - (editing.balance_due || 0)
+          const balanceDelta = newBalanceDue - oldBalanceDue
           if (balanceDelta !== 0) {
             tx.update(supplierRef, { balance_owed: Math.max(0, (supplierSnap.data()?.balance_owed || 0) + balanceDelta) })
           }
@@ -114,13 +126,24 @@ export default function Purchases() {
 
           tx.set(purchaseRef, {
             supplier_id: supplierId, total, amount_paid: paid, balance_due: Math.max(0, total - paid),
-            created_by: profile?.id, created_at: serverTimestamp(),
+            created_by: profile?.id ?? null, created_at: serverTimestamp(),
           })
+          // If the same product is on two rows, add both quantities in ONE stock update
+          // (previously the second row overwrote the first and stock came out too low).
+          const addMap = {}
+          const snapById = {}
           valid.forEach((i, idx) => {
+            addMap[i.product_id] = (addMap[i.product_id] || 0) + Number(i.qty)
+            snapById[i.product_id] = productSnaps[idx]
+          })
+          Object.keys(addMap).forEach((id) => {
+            const snap = snapById[id]
+            const currentStock = snap.exists() ? (snap.data().stock_qty || 0) : 0
+            tx.update(doc(db, ...tPath('products', id)), { stock_qty: currentStock + addMap[id] })
+          })
+          valid.forEach((i) => {
             const itemRef = doc(collection(db, ...tPath('purchases', purchaseRef.id, 'items')))
             tx.set(itemRef, { product_id: i.product_id, qty: Number(i.qty), cost_price: Number(i.cost_price), amount: Number(i.qty) * Number(i.cost_price) })
-            const currentStock = productSnaps[idx].exists() ? (productSnaps[idx].data().stock_qty || 0) : 0
-            tx.update(productRefs[idx], { stock_qty: currentStock + Number(i.qty) })
             const movementRef = doc(collection(db, ...tPath('stockMovements')))
             tx.set(movementRef, { product_id: i.product_id, change_qty: Number(i.qty), reason: 'purchase', reference_id: purchaseRef.id, created_at: serverTimestamp() })
           })
@@ -137,6 +160,7 @@ export default function Purchases() {
     } catch (err) {
       alert('Could not save purchase: ' + err.message)
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }
