@@ -21,18 +21,21 @@ export function toJsDate(d) {
 }
 
 // Generates a sequential-looking receipt/ticket number, e.g. RCT-20260710-0001
-// Firestore has no server-side row counts like Postgres, so we count today's docs.
-export async function generateSequenceNumber(prefix, collectionName, dateField = 'created_at') {
+// Pass the collection PATH as an array, e.g. generateSequenceNumber('RCT', tPath('sales')).
+// (A plain string would count a top-level collection that does not hold the shop's data.)
+export async function generateSequenceNumber(prefix, pathSegments, dateField = 'created_at') {
+  const segments = Array.isArray(pathSegments) ? pathSegments : [pathSegments]
   const today = new Date()
-  const dateStr = today.toISOString().slice(0, 10).replace(/-/g, '')
-  const startOfDay = new Date(today.setHours(0, 0, 0, 0))
+  const pad = (n) => String(n).padStart(2, '0')
+  const dateStr = `${today.getFullYear()}${pad(today.getMonth() + 1)}${pad(today.getDate())}` // shop's local date
+  const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate())
   try {
-    const q = query(collection(db, collectionName), where(dateField, '>=', Timestamp.fromDate(startOfDay)))
+    const q = query(collection(db, ...segments), where(dateField, '>=', Timestamp.fromDate(startOfDay)))
     const snap = await getCountFromServer(q)
     const seq = String((snap.data().count || 0) + 1).padStart(4, '0')
     return `${prefix}-${dateStr}-${seq}`
   } catch {
-    // Fallback if the count query needs an index that hasn't built yet
+    // Fallback if the count query is unavailable (e.g. offline)
     return `${prefix}-${dateStr}-${String(Date.now()).slice(-4)}`
   }
 }
