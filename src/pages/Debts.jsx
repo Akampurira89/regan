@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CreditCard, MessageCircle, Send } from 'lucide-react'
-import { collection, getDocs, addDoc, updateDoc, doc, query, where, serverTimestamp } from 'firebase/firestore'
+import { collection, getDocs, doc, query, where, serverTimestamp, runTransaction } from 'firebase/firestore'
 import { db, tPath } from '../lib/firebase'
 import { Card, Button, Input, Select, Modal, EmptyState, Badge } from '../components/ui/ui'
 import { formatMoney, formatDate, daysBetween, logAudit } from '../utils/helpers'
@@ -16,6 +16,8 @@ export default function Debts() {
   const [payAmount, setPayAmount] = useState('')
   const [payMethod, setPayMethod] = useState('cash')
   const [loading, setLoading] = useState(true)
+  const [paying, setPaying] = useState(false)
+  const payingRef = useRef(false)
 
   const load = async () => {
     setLoading(true)
@@ -38,16 +40,46 @@ export default function Debts() {
 
   const recordPayment = async (e) => {
     e.preventDefault()
+    if (payingRef.current) return // blocks double-taps instantly
     const amount = Number(payAmount)
     if (!amount || amount <= 0) return
+    if (!navigator.onLine) { alert('No internet connection. This needs internet so stock and balances stay exact. Please reconnect and try again.'); return }
     const debt = payModal
-    const newPaid = Number(debt.amount_paid) + amount
-    const newBalance = Math.max(0, Number(debt.original_amount) - newPaid)
-    await updateDoc(doc(db, ...tPath('debts', debt.id)), { amount_paid: newPaid, balance: newBalance, status: newBalance === 0 ? 'paid' : 'partially_paid' })
-    await addDoc(collection(db, ...tPath('payments')), { reference_type: 'debt', reference_id: debt.id, amount, method: payMethod, received_by: profile?.id, created_at: serverTimestamp() })
-    await logAudit({ userId: profile?.id, action: 'payment', entityType: 'debts', entityId: debt.id, newValues: { amount } })
-    setPayModal(null); setPayAmount('')
-    load()
+    payingRef.current = true
+    setPaying(true)
+    try {
+      // Re-reads the CURRENT debt inside the transaction, so a repeat tap or a
+      // second device can never double-count or overpay. Debt, the linked sale
+      // and the payment record are saved together.
+      await runTransaction(db, async (tx) => {
+        const debtRef = doc(db, ...tPath('debts', debt.id))
+        const debtSnap = await tx.get(debtRef)
+        if (!debtSnap.exists()) throw new Error('This debt no longer exists.')
+        const d = debtSnap.data()
+        const balance = Number(d.balance) || 0
+        if (amount > balance) throw new Error(`Amount is more than the balance due (${formatMoney(balance, company.currency)}).`)
+        const saleRef = d.sale_id ? doc(db, ...tPath('sales', d.sale_id)) : null
+        const saleSnap = saleRef ? await tx.get(saleRef) : null
+
+        const newPaid = (Number(d.amount_paid) || 0) + amount
+        const newBalance = balance - amount
+        tx.update(debtRef, { amount_paid: newPaid, balance: newBalance, status: newBalance === 0 ? 'paid' : 'partially_paid' })
+        if (saleSnap?.exists()) {
+          const sd = saleSnap.data()
+          tx.update(saleRef, { amount_paid: (Number(sd.amount_paid) || 0) + amount, balance_due: Math.max(0, (Number(sd.balance_due) || 0) - amount) })
+        }
+        const payRef = doc(collection(db, ...tPath('payments')))
+        tx.set(payRef, { reference_type: 'debt', reference_id: debt.id, amount, method: payMethod, received_by: profile?.id ?? null, created_at: serverTimestamp() })
+      })
+      await logAudit({ userId: profile?.id, action: 'payment', entityType: 'debts', entityId: debt.id, newValues: { amount } })
+      setPayModal(null); setPayAmount('')
+      load()
+    } catch (err) {
+      alert('Could not record payment: ' + err.message)
+    } finally {
+      payingRef.current = false
+      setPaying(false)
+    }
   }
 
   const remind = async (debt, via) => {
@@ -105,7 +137,7 @@ export default function Debts() {
       <Modal open={!!payModal} onClose={() => setPayModal(null)} title={`Record Payment: ${payModal?.customer?.name || ''}`}>
         <form onSubmit={recordPayment}>
           <p className="text-sm text-gray-500 mb-3">Balance due: <strong>{formatMoney(payModal?.balance, company.currency)}</strong></p>
-          <Input label="Amount Received" type="number" required value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
+          <Input label="Amount Received" type="number" required min="1" max={payModal?.balance || undefined} value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
           <Select label="Payment Method" value={payMethod} onChange={(e) => setPayMethod(e.target.value)}>
             <option value="cash">Cash</option>
             <option value="mtn_momo">MTN MoMo</option>
@@ -114,7 +146,7 @@ export default function Debts() {
           </Select>
           <div className="flex justify-end gap-2 mt-2">
             <Button type="button" variant="secondary" onClick={() => setPayModal(null)}>Cancel</Button>
-            <Button type="submit">Save Payment</Button>
+            <Button type="submit" disabled={paying}>{paying ? 'Saving...' : 'Save Payment'}</Button>
           </div>
         </form>
       </Modal>
