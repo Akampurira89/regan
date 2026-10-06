@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Printer, Search, Undo2, HandCoins, Pencil, Trash2, Plus } from 'lucide-react'
-import { collection, getDocs, query, orderBy, limit, doc, runTransaction, where } from 'firebase/firestore'
+import { collection, getDocs, query, orderBy, limit, doc, runTransaction, where, addDoc, updateDoc, serverTimestamp } from 'firebase/firestore'
 import { db, tPath } from '../../lib/firebase'
 import { startOfDay, startOfWeek, startOfMonth } from 'date-fns'
 import { Card, Button, Input, Modal, EmptyState, Badge } from '../../components/ui/ui'
@@ -70,7 +70,7 @@ export default function ReceiptHistory() {
     return matchesSearch && matchesPeriod
   })
 
-  const periodTotal = filtered.reduce((sum, row) => sum + (Number(row.amount) || 0), 0)
+  const periodTotal = filtered.reduce((sum, row) => (row.kind === 'sale' && row.raw.status === 'void' ? sum : sum + (Number(row.amount) || 0)), 0) // reversed sales are not counted
 
   const openReprint = async (sale) => {
     const itemsSnap = await getDocs(collection(db, ...tPath('sales', sale.id, 'items')))
@@ -86,10 +86,13 @@ export default function ReceiptHistory() {
       const debtSnap = sale.is_credit_sale ? await getDocs(query(collection(db, ...tPath('debts')), where('sale_id', '==', sale.id))) : null
 
       await runTransaction(db, async (tx) => {
+        const saleDocRef = doc(db, ...tPath('sales', sale.id))
+        const saleDocSnap = await tx.get(saleDocRef)
+        if (saleDocSnap.data()?.status === 'void') throw new Error('This sale was already reversed.')
         const productRefs = items.map((i) => doc(db, ...tPath('products', i.product_id)))
         const productSnaps = await Promise.all(productRefs.map((r) => tx.get(r)))
 
-        tx.update(doc(db, ...tPath('sales', sale.id)), { status: 'void' })
+        tx.update(saleDocRef, { status: 'void' })
         items.forEach((i, idx) => {
           if (productSnaps[idx].exists()) {
             tx.update(productRefs[idx], { stock_qty: (productSnaps[idx].data().stock_qty || 0) + i.qty })
@@ -132,7 +135,7 @@ export default function ReceiptHistory() {
     setSaving(true)
     try {
       const newTotal = editTotal()
-      const paid = Number(editPaid) || 0
+      const paid = Math.min(newTotal, Math.max(0, Number(editPaid) || 0))
       const newBalanceDue = Math.max(0, newTotal - paid)
 
       // Same reconcile pattern as Purchases: reverse old items' stock effect,
@@ -151,6 +154,9 @@ export default function ReceiptHistory() {
         originalEditItems.forEach((i) => { if (i.product_id) stockMap[i.product_id] += i.qty }) // give back old qty
         editItems.forEach((i) => { if (i.product_id) stockMap[i.product_id] -= Number(i.qty) }) // take out new qty
 
+        Object.values(stockMap).forEach((left) => {
+          if (left < 0) throw new Error('Not enough stock to increase this sale. Nothing was changed.')
+        })
         productIds.forEach((id, idx) => tx.update(productRefs[idx], { stock_qty: stockMap[id] }))
 
         originalEditItems.forEach((i) => tx.delete(doc(db, ...tPath('sales', editSale.id, 'items', i.id))))
@@ -169,13 +175,14 @@ export default function ReceiptHistory() {
         })
       })
 
-      if (editSale.is_credit_sale) {
+      {
+        // Keep the Debts list in step with the edited sale (also when a sale BECOMES unpaid/partly paid)
         const debtSnap = await getDocs(query(collection(db, ...tPath('debts')), where('sale_id', '==', editSale.id)))
         if (!debtSnap.empty) {
           const debtRef = doc(db, ...tPath('debts', debtSnap.docs[0].id))
-          await runTransaction(db, async (tx) => {
-            tx.update(debtRef, { original_amount: newTotal, balance: newBalanceDue, status: newBalanceDue === 0 ? 'paid' : 'partially_paid' })
-          })
+          await updateDoc(debtRef, { original_amount: newTotal, amount_paid: paid, balance: newBalanceDue, status: newBalanceDue === 0 ? 'paid' : 'partially_paid' })
+        } else if (newBalanceDue > 0 && editSale.customer_id) {
+          await addDoc(collection(db, ...tPath('debts')), { sale_id: editSale.id, customer_id: editSale.customer_id, original_amount: newTotal, amount_paid: paid, balance: newBalanceDue, status: 'open', created_at: serverTimestamp() })
         }
       }
 
