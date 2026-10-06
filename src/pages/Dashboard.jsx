@@ -9,7 +9,7 @@ import { useAuth } from '../context/AuthContext'
 import { openWhatsApp } from '../utils/notifications'
 
 const NUDGE_KEY = 'eddyk_lowstock_nudge_date'
-const todayStr = () => new Date().toISOString().slice(0, 10)
+const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
 
 export default function Dashboard() {
   const { company, template } = useSettings()
