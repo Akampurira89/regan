@@ -7,11 +7,16 @@ import { formatMoney, exportToCSV } from '../utils/helpers'
 import { useSettings } from '../context/SettingsContext'
 import { DollarSign, TrendingUp, TrendingDown, Package, Scale, Calendar, Trophy } from 'lucide-react'
 
+// Local (shop) calendar date as YYYY-MM-DD. toISOString() gives the UTC date, which
+// is a day behind for the first hours of each day in Uganda (UTC+3).
+const pad2 = (n) => String(n).padStart(2, '0')
+const localDateStr = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+
 function rangeFor(preset) {
   const now = new Date()
-  let start = new Date()
-  if (preset === 'today') start.setHours(0, 0, 0, 0)
-  if (preset === 'week') start.setDate(now.getDate() - 7)
+  const start = new Date()
+  start.setHours(0, 0, 0, 0) // every period starts at 00:00 so the first day is fully included
+  if (preset === 'week') start.setDate(now.getDate() - 6) // today + previous 6 days
   if (preset === 'month') start.setDate(1)
   if (preset === 'year') { start.setMonth(0); start.setDate(1) }
   return { start, end: now }
@@ -24,14 +29,14 @@ function previousRange(start, end) {
   return { start: prevStart, end: prevEnd }
 }
 
-const dayKey = (d) => (d?.toDate ? d.toDate() : new Date(d)).toISOString().slice(0, 10)
+const dayKey = (d) => localDateStr(d?.toDate ? d.toDate() : new Date(d))
 const weekKey = (d) => {
   const date = d?.toDate ? d.toDate() : new Date(d)
   const monday = new Date(date)
   monday.setDate(date.getDate() - ((date.getDay() + 6) % 7))
-  return monday.toISOString().slice(0, 10)
+  return localDateStr(monday)
 }
-const monthKey = (d) => (d?.toDate ? d.toDate() : new Date(d)).toISOString().slice(0, 7)
+const monthKey = (d) => localDateStr(d?.toDate ? d.toDate() : new Date(d)).slice(0, 7)
 
 async function loadPeriodFinancials(start, end) {
   const salesSnap = await getDocs(query(collection(db, ...tPath('sales')), where('created_at', '>=', Timestamp.fromDate(start)), where('created_at', '<=', Timestamp.fromDate(end))))
@@ -61,6 +66,7 @@ export default function Reports() {
   const [products, setProducts] = useState([])
   const [cashIn, setCashIn] = useState(0)
   const [cashOutSuppliers, setCashOutSuppliers] = useState(0)
+  const [consignProfit, setConsignProfit] = useState(0)
   const [cashOutPersonal, setCashOutPersonal] = useState(0)
   const [receivables, setReceivables] = useState(0)
   const [payables, setPayables] = useState(0)
@@ -72,7 +78,7 @@ export default function Reports() {
   const load = async () => {
     setLoading(true)
     const { start, end } = preset === 'custom' && customStart && customEnd
-      ? { start: new Date(customStart), end: new Date(customEnd) }
+      ? { start: new Date(customStart + 'T00:00:00'), end: new Date(customEnd + 'T23:59:59.999') }
       : rangeFor(preset)
     const prev = previousRange(start, end)
 
@@ -94,8 +100,8 @@ export default function Reports() {
     setStaffMap(Object.fromEntries(profilesSnap.docs.map((d) => [d.id, d.data().full_name])))
 
     const expCatMap = Object.fromEntries(expCatSnap.docs.map((d) => [d.id, d.data().name]))
-    const startStr = start.toISOString().slice(0, 10)
-    const endStr = end.toISOString().slice(0, 10)
+    const startStr = localDateStr(start)
+    const endStr = localDateStr(end)
     setExpenses(expSnap.docs.map((d) => ({ id: d.id, ...d.data(), categoryName: expCatMap[d.data().category_id] })).filter((e) => e.expense_date >= startStr && e.expense_date <= endStr))
     setProducts(prodSnap.docs.map((d) => ({ id: d.id, ...d.data() })))
 
@@ -103,8 +109,26 @@ export default function Reports() {
       const ts = p.created_at?.toDate ? p.created_at.toDate() : null
       return ts && ts >= start && ts <= end
     })
-    setCashIn(periodPayments.filter((p) => p.reference_type === 'sale' || p.reference_type === 'debt').reduce((s, p) => s + Number(p.amount), 0))
-    setCashOutSuppliers(periodPayments.filter((p) => p.reference_type === 'supplier').reduce((s, p) => s + Number(p.amount), 0))
+    // Reversed sales: their payments should not count as money in
+    // Consignment sales: cash in is the full sale amount, profit is what is left after the owner's share
+    // Purchases: what was paid when the order was recorded is also money out to suppliers
+    const [consignSnap, purchasesSnap, voidSnap] = await Promise.all([
+      getDocs(collection(db, ...tPath('consignmentItems'))),
+      getDocs(query(collection(db, ...tPath('purchases')), where('created_at', '>=', Timestamp.fromDate(start)), where('created_at', '<=', Timestamp.fromDate(end)))),
+      getDocs(query(collection(db, ...tPath('sales')), where('status', '==', 'void'))),
+    ])
+    const voidIds = new Set(voidSnap.docs.map((d) => d.id))
+    const consignSold = consignSnap.docs.map((d) => d.data()).filter((c) => {
+      const t = c.sold_at?.toDate ? c.sold_at.toDate() : null
+      return (c.status === 'sold' || c.status === 'paid') && t && t >= start && t <= end
+    })
+    const consignCash = consignSold.reduce((sum, c) => sum + Number(c.sale_amount || 0), 0)
+    setConsignProfit(consignSold.reduce((sum, c) => sum + Number(c.sale_amount || 0) - Number(c.owner_amount || 0), 0))
+    const purchasePaid = purchasesSnap.docs.reduce((sum, d) => sum + Number(d.data().amount_paid || 0), 0)
+    setCashIn(
+      periodPayments.filter((p) => (p.reference_type === 'sale' && !voidIds.has(p.reference_id)) || p.reference_type === 'debt').reduce((s, p) => s + Number(p.amount), 0) + consignCash
+    )
+    setCashOutSuppliers(periodPayments.filter((p) => p.reference_type === 'supplier').reduce((s, p) => s + Number(p.amount), 0) + purchasePaid)
     setCashOutPersonal(periodPayments.filter((p) => p.reference_type === 'personal_payable' || p.reference_type === 'consignment_owner').reduce((s, p) => s + Number(p.amount), 0))
 
     setReceivables(debtsSnap.docs.reduce((s, d) => s + Number(d.data().balance), 0))
@@ -132,7 +156,7 @@ export default function Reports() {
   useEffect(() => { load() }, [preset])
 
   const totalExpenses = expenses.reduce((sum, e) => sum + Number(e.amount), 0)
-  const netProfit = (current?.grossProfit || 0) - totalExpenses
+  const netProfit = (current?.grossProfit || 0) + consignProfit - totalExpenses
   const stockValuation = products.reduce((sum, p) => sum + Number(p.buying_price) * Number(p.stock_qty), 0)
   const netCashFlow = cashIn - totalExpenses - cashOutSuppliers - cashOutPersonal
 
@@ -353,6 +377,7 @@ export default function Reports() {
               <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Total Revenue</td><td className="py-2 text-right font-medium">{formatMoney(current?.revenue || 0, company.currency)}</td></tr>
               <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Cost of Goods Sold</td><td className="py-2 text-right font-medium text-red-500">-{formatMoney(current?.cogs || 0, company.currency)}</td></tr>
               <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2 font-semibold">Gross Profit</td><td className="py-2 text-right font-semibold">{formatMoney(current?.grossProfit || 0, company.currency)}</td></tr>
+              <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Consignment Profit</td><td className="py-2 text-right font-medium text-emerald-600">+{formatMoney(consignProfit, company.currency)}</td></tr>
               <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Operating Expenses</td><td className="py-2 text-right font-medium text-red-500">-{formatMoney(totalExpenses, company.currency)}</td></tr>
               <tr><td className="py-2 font-bold">Net Profit</td><td className={`py-2 text-right font-bold ${netProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(netProfit, company.currency)}</td></tr>
             </tbody>
@@ -362,9 +387,9 @@ export default function Reports() {
         <Card title="Cash Flow (this period)">
           <table className="w-full text-sm">
             <tbody>
-              <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Cash In (sale + debt payments received)</td><td className="py-2 text-right font-medium text-emerald-600">+{formatMoney(cashIn, company.currency)}</td></tr>
+              <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Cash In (sales, debt payments &amp; consignment sales)</td><td className="py-2 text-right font-medium text-emerald-600">+{formatMoney(cashIn, company.currency)}</td></tr>
               <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Cash Out — Expenses</td><td className="py-2 text-right font-medium text-red-500">-{formatMoney(totalExpenses, company.currency)}</td></tr>
-              <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Cash Out — Supplier Payments</td><td className="py-2 text-right font-medium text-red-500">-{formatMoney(cashOutSuppliers, company.currency)}</td></tr>
+              <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Cash Out — Supplier Payments (incl. paid when ordering)</td><td className="py-2 text-right font-medium text-red-500">-{formatMoney(cashOutSuppliers, company.currency)}</td></tr>
               <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Cash Out — Personal Debts &amp; Consignment Owners</td><td className="py-2 text-right font-medium text-red-500">-{formatMoney(cashOutPersonal, company.currency)}</td></tr>
               <tr><td className="py-2 font-bold">Net Cash Flow</td><td className={`py-2 text-right font-bold ${netCashFlow >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(netCashFlow, company.currency)}</td></tr>
             </tbody>
