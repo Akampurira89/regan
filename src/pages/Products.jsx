@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Plus, Search, Pencil, Trash2, Download, PackagePlus, ScanLine, Tags, X } from 'lucide-react'
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, serverTimestamp } from 'firebase/firestore'
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, runTransaction } from 'firebase/firestore'
 import { db, tPath } from '../lib/firebase'
 import { Button, Card, Input, Select, Modal, Badge, EmptyState, Checkbox } from '../components/ui/ui'
 import BarcodeScannerModal from '../components/ui/BarcodeScannerModal'
@@ -15,6 +15,7 @@ const emptyForm = {
 }
 
 export default function Products() {
+  const adjustingRef = useRef(false)
   const { profile } = useAuth()
   const { company } = useSettings()
   const [products, setProducts] = useState([])
@@ -96,7 +97,24 @@ export default function Products() {
     if (!magnitude) return
     const qty = adjustDirection === 'remove' ? -magnitude : magnitude
     const product = adjustModal
-    await updateDoc(doc(db, ...tPath('products', product.id)), { stock_qty: product.stock_qty + qty })
+    if (adjustingRef.current) return // blocks double-taps
+    adjustingRef.current = true
+    try {
+      // Uses the CURRENT stock inside a transaction (not the possibly-old number on screen)
+      // and refuses to go below zero.
+      await runTransaction(db, async (tx) => {
+        const ref = doc(db, ...tPath('products', product.id))
+        const snap = await tx.get(ref)
+        const current = snap.data()?.stock_qty || 0
+        if (current + qty < 0) throw new Error(`Can't remove ${magnitude}: only ${current} in stock.`)
+        tx.update(ref, { stock_qty: current + qty })
+      })
+    } catch (err) {
+      alert('Stock not changed: ' + err.message)
+      adjustingRef.current = false
+      return
+    }
+    adjustingRef.current = false
     await addDoc(collection(db, ...tPath('stockMovements')), {
       product_id: product.id, change_qty: qty, reason: adjustReason, created_by: profile?.id,
       notes: 'Manual adjustment via Products page', created_at: serverTimestamp(),
