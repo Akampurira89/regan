@@ -8,6 +8,7 @@ import {
 import { useAuth } from '../../context/AuthContext'
 import { useSettings } from '../../context/SettingsContext'
 import CalculatorModal from '../ui/CalculatorModal'
+import HelpButton from '../ui/HelpButton'
 
 const NAV = [
   { key: 'dashboard', to: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -31,7 +32,7 @@ const NAV = [
 export default function DashboardLayout() {
   const [open, setOpen] = useState(false)
   const [calcOpen, setCalcOpen] = useState(false)
-  const { profile, logout, can, viewingAs, exitViewAs } = useAuth()
+  const { profile, logout, can, viewingAs, exitViewAs, daysLeft } = useAuth()
   const { template, darkMode, setDarkMode } = useSettings()
   const navigate = useNavigate()
 
@@ -139,10 +140,16 @@ export default function DashboardLayout() {
           </div>
         </header>
         <main className="flex-1 p-4 lg:p-6 overflow-x-hidden">
+          {!viewingAs && daysLeft !== null && daysLeft > 0 && daysLeft <= 5 && (
+            <div className="mb-4 rounded-xl bg-yellow-50 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300 text-sm px-4 py-3">
+              Your subscription ends in {daysLeft} day{daysLeft > 1 ? 's' : ''}. Please pay UGX 50,000 to avoid being locked out.
+            </div>
+          )}
           <Outlet />
         </main>
       </div>
       <CalculatorModal open={calcOpen} onClose={() => setCalcOpen(false)} />
+      <HelpButton />
       </div>
     </div>
   )
