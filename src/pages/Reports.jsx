@@ -1,11 +1,10 @@
-import { useEffect, useState } from 'react'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, LineChart, Line } from 'recharts'
+import { useEffect, useRef, useState } from 'react'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area } from 'recharts'
 import { collection, getDocs, query, where, Timestamp } from 'firebase/firestore'
 import { db, tPath } from '../lib/firebase'
-import { Card, Select, Input, Button, StatCard, EmptyState } from '../components/ui/ui'
 import { formatMoney, exportToCSV } from '../utils/helpers'
 import { useSettings } from '../context/SettingsContext'
-import { DollarSign, TrendingUp, TrendingDown, Package, Scale, Calendar, Trophy } from 'lucide-react'
+import { DollarSign, TrendingUp, TrendingDown, Package, Scale, Trophy, Download, Crown, Wallet, ArrowDownRight, ArrowUpRight, Sparkles } from 'lucide-react'
 
 // Local (shop) calendar date as YYYY-MM-DD. toISOString() gives the UTC date, which
 // is a day behind for the first hours of each day in Uganda (UTC+3).
@@ -53,6 +52,93 @@ async function loadPeriodFinancials(start, end) {
     cogs = saleItems.reduce((sum, i) => sum + Number(i.cost_price) * Number(i.qty), 0)
   }
   return { revenue, cogs, grossProfit: revenue - cogs, saleItems, sales: salesData, salesWithItems }
+}
+
+
+const PRESETS = [['today', 'Today'], ['week', '7 Days'], ['month', 'Month'], ['year', 'Year'], ['custom', 'Custom']]
+const MEDALS = ['🥇', '🥈', '🥉']
+
+// Number that smoothly counts up/down to its new value
+function AnimatedMoney({ value, currency }) {
+  const [shown, setShown] = useState(0)
+  const from = useRef(0)
+  useEffect(() => {
+    const start = performance.now()
+    const begin = from.current
+    const target = Number(value || 0)
+    let raf
+    const tick = (now) => {
+      const t = Math.min(1, (now - start) / 700)
+      const eased = 1 - Math.pow(1 - t, 3)
+      setShown(begin + (target - begin) * eased)
+      if (t < 1) raf = requestAnimationFrame(tick)
+      else from.current = target
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [value])
+  return <>{formatMoney(Math.round(shown), currency)}</>
+}
+
+function Panel({ title, icon: Icon, tone = 'text-orange-500', right, children, className = '' }) {
+  return (
+    <section className={`rounded-2xl bg-white dark:bg-gray-900 shadow-sm ring-1 ring-gray-100 dark:ring-gray-800 p-4 sm:p-5 ${className}`}>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-200">
+          {Icon && <Icon size={16} className={tone} />}{title}
+        </h2>
+        {right}
+      </div>
+      {children}
+    </section>
+  )
+}
+
+function Kpi({ label, children, sub, icon: Icon, gradient }) {
+  return (
+    <div className="relative overflow-hidden rounded-2xl bg-white dark:bg-gray-900 shadow-lg shadow-black/5 ring-1 ring-gray-100 dark:ring-gray-800 p-4">
+      <div className={`absolute -right-6 -top-6 w-24 h-24 rounded-full bg-gradient-to-br ${gradient} opacity-10`} />
+      <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${gradient} text-white flex items-center justify-center shadow-md mb-3`}><Icon size={18} /></div>
+      <p className="text-xs text-gray-500 dark:text-gray-400">{label}</p>
+      <p className="text-lg sm:text-xl font-extrabold text-gray-900 dark:text-gray-50 tracking-tight">{children}</p>
+      <div className="min-h-[1rem]">{sub}</div>
+    </div>
+  )
+}
+
+function FlowBar({ label, value, max, color, sign, currency }) {
+  return (
+    <div className="mb-3 last:mb-0">
+      <div className="flex justify-between text-xs mb-1">
+        <span className="text-gray-500 dark:text-gray-400">{label}</span>
+        <span className="font-semibold text-gray-800 dark:text-gray-100">{sign}{formatMoney(value, currency)}</span>
+      </div>
+      <div className="h-2.5 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
+        <div className={`h-full rounded-full bg-gradient-to-r ${color} transition-all duration-700`} style={{ width: `${max ? Math.max(2, Math.min(100, (value / max) * 100)) : 0}%` }} />
+      </div>
+    </div>
+  )
+}
+
+function Line2({ label, value, tone = '', bold }) {
+  return (
+    <div className={`flex justify-between py-2 text-sm border-b border-gray-100 dark:border-gray-800 last:border-0 ${bold ? 'font-bold' : ''}`}>
+      <span className="text-gray-600 dark:text-gray-300">{label}</span>
+      <span className={tone}>{value}</span>
+    </div>
+  )
+}
+
+const Empty = ({ text }) => <p className="text-center py-8 text-sm text-gray-400">{text}</p>
+
+const ChartTip = ({ active, payload, label, currency }) => {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="rounded-xl bg-gray-900 text-white text-xs px-3 py-2 shadow-xl">
+      <p className="text-gray-400">{label}</p>
+      <p className="font-bold">{formatMoney(payload[0].value, currency)}</p>
+    </div>
+  )
 }
 
 export default function Reports() {
@@ -206,221 +292,257 @@ export default function Reports() {
 
   const doExportSales = () => exportToCSV('sales_report.csv', dailyBreakdown.map((d) => ({ date: d.date, total: d.total, transactions: d.transactions, items_sold: d.items })))
 
-  const ChangeBadge = ({ value }) => {
+  const cur = company.currency
+  const ChangeBadge = ({ value, light }) => {
     if (value === null || !isFinite(value)) return null
     const up = value >= 0
-    return <span className={`text-xs font-medium ${up ? 'text-emerald-600' : 'text-red-600'}`}>{up ? '▲' : '▼'} {Math.abs(value).toFixed(0)}% vs prior period</span>
+    const Icon = up ? ArrowUpRight : ArrowDownRight
+    const cls = light
+      ? 'bg-white/20 text-white'
+      : up ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400'
+    return <span className={`inline-flex items-center gap-0.5 mt-1 px-1.5 py-0.5 rounded-full text-[11px] font-semibold ${cls}`}><Icon size={12} />{Math.abs(value).toFixed(0)}% vs prior</span>
   }
 
+  const totalOut = totalExpenses + cashOutSuppliers + cashOutPersonal
+  const flowMax = Math.max(cashIn, totalOut, 1)
+  const dayMax = Math.max(...dailyBreakdown.map((d) => d.total), 1)
+  const margin = current?.revenue ? (netProfit / current.revenue) * 100 : null
+
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-gray-800 dark:text-gray-100">Reports / Analytics</h1>
-          <p className="text-sm text-gray-400">Daily sales, trends, P&L, cash flow, and balance sheet</p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <Select value={preset} onChange={(e) => setPreset(e.target.value)} className="!mb-0">
-            <option value="today">Today</option>
-            <option value="week">Last 7 Days</option>
-            <option value="month">This Month</option>
-            <option value="year">This Year</option>
-            <option value="custom">Custom Range</option>
-          </Select>
-          {preset === 'custom' && (
-            <>
-              <Input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="!mb-0" />
-              <Input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="!mb-0" />
-              <Button onClick={load}>Apply</Button>
-            </>
-          )}
-          <Button variant="secondary" onClick={doExportSales}>Export CSV</Button>
+    <div className="-m-4 lg:-m-6 pb-10">
+      {/* HERO */}
+      <div className="relative overflow-hidden bg-gradient-to-br from-orange-500 via-orange-600 to-rose-700 text-white px-4 lg:px-6 pt-6 pb-20">
+        <div className="absolute -right-16 -top-16 w-64 h-64 rounded-full bg-white/10 blur-2xl" />
+        <div className="absolute -left-10 bottom-0 w-48 h-48 rounded-full bg-yellow-300/10 blur-2xl" />
+        <div className="relative max-w-6xl mx-auto">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="flex items-center gap-1.5 text-xs font-medium text-white/80"><Sparkles size={14} /> Reports &amp; Analytics</p>
+              <h1 className="text-2xl font-extrabold tracking-tight">Business Overview</h1>
+            </div>
+            <button onClick={doExportSales} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/15 hover:bg-white/25 backdrop-blur text-sm font-medium transition-colors">
+              <Download size={15} /> Export CSV
+            </button>
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <div className="inline-flex p-1 rounded-xl bg-black/20 backdrop-blur">
+              {PRESETS.map(([key, text]) => (
+                <button key={key} onClick={() => setPreset(key)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${preset === key ? 'bg-white text-orange-700 shadow' : 'text-white/80 hover:text-white'}`}>
+                  {text}
+                </button>
+              ))}
+            </div>
+            {preset === 'custom' && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="px-2.5 py-1.5 rounded-lg bg-white/90 text-gray-800 text-xs" />
+                <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="px-2.5 py-1.5 rounded-lg bg-white/90 text-gray-800 text-xs" />
+                <button onClick={load} className="px-3 py-1.5 rounded-lg bg-white text-orange-700 text-xs font-bold">Apply</button>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-6">
+            <p className="text-sm text-white/80">Net Profit</p>
+            {loading ? <div className="h-10 w-56 rounded-lg bg-white/20 animate-pulse mt-1" /> : (
+              <p className="text-3xl sm:text-5xl font-black tracking-tight"><AnimatedMoney value={netProfit} currency={cur} /></p>
+            )}
+            <div className="flex flex-wrap items-center gap-2 mt-1">
+              <ChangeBadge value={profitChange} light />
+              {margin !== null && isFinite(margin) && <span className="inline-flex mt-1 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-white/20">{margin.toFixed(0)}% margin</span>}
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard label="Revenue" value={formatMoney(current?.revenue || 0, company.currency)} sub={<ChangeBadge value={revenueChange} />} icon={DollarSign} color="blue" />
-        <StatCard label="Gross Profit" value={formatMoney(current?.grossProfit || 0, company.currency)} icon={TrendingUp} color="green" />
-        <StatCard label="Net Profit" value={formatMoney(netProfit, company.currency)} sub={<ChangeBadge value={profitChange} />} icon={netProfit >= 0 ? TrendingUp : TrendingDown} color={netProfit >= 0 ? 'green' : 'red'} />
-        <StatCard label="Stock Valuation" value={formatMoney(stockValuation, company.currency)} icon={Package} color="purple" />
-      </div>
+      <div className="max-w-6xl mx-auto px-4 lg:px-6 -mt-12 space-y-4">
+        {/* KPI CARDS */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <Kpi label="Revenue" icon={DollarSign} gradient="from-blue-500 to-indigo-600" sub={<ChangeBadge value={revenueChange} />}>{formatMoney(current?.revenue || 0, cur)}</Kpi>
+          <Kpi label="Gross Profit" icon={TrendingUp} gradient="from-emerald-500 to-teal-600">{formatMoney(current?.grossProfit || 0, cur)}</Kpi>
+          <Kpi label="Net Cash Flow" icon={Wallet} gradient={netCashFlow >= 0 ? 'from-cyan-500 to-blue-600' : 'from-rose-500 to-red-600'}>{formatMoney(netCashFlow, cur)}</Kpi>
+          <Kpi label="Stock Valuation" icon={Package} gradient="from-purple-500 to-fuchsia-600">{formatMoney(stockValuation, cur)}</Kpi>
+        </div>
 
-      <Card title="Record Performance (last 180 days)" actions={<Trophy size={16} className="text-amber-500" />}>
+        {/* RECORDS */}
         <div className="grid sm:grid-cols-3 gap-3">
-          <div className="bg-amber-50 dark:bg-amber-900/20 rounded-lg p-3">
-            <p className="text-xs text-gray-500 dark:text-gray-400">Best Single Day</p>
-            <p className="text-lg font-bold text-gray-800 dark:text-gray-100">{trend.bestDay ? formatMoney(trend.bestDay[1], company.currency) : '-'}</p>
-            <p className="text-xs text-gray-400">{trend.bestDay ? trend.bestDay[0] : 'No data yet'}</p>
-          </div>
-          <div className="bg-amber-50 dark:bg-amber-900/20 rounded-lg p-3">
-            <p className="text-xs text-gray-500 dark:text-gray-400">Best Week (starting)</p>
-            <p className="text-lg font-bold text-gray-800 dark:text-gray-100">{trend.bestWeek ? formatMoney(trend.bestWeek[1], company.currency) : '-'}</p>
-            <p className="text-xs text-gray-400">{trend.bestWeek ? trend.bestWeek[0] : 'No data yet'}</p>
-          </div>
-          <div className="bg-amber-50 dark:bg-amber-900/20 rounded-lg p-3">
-            <p className="text-xs text-gray-500 dark:text-gray-400">Best Month</p>
-            <p className="text-lg font-bold text-gray-800 dark:text-gray-100">{trend.bestMonth ? formatMoney(trend.bestMonth[1], company.currency) : '-'}</p>
-            <p className="text-xs text-gray-400">{trend.bestMonth ? trend.bestMonth[0] : 'No data yet'}</p>
-          </div>
+          {[['Best Single Day', trend.bestDay], ['Best Week (starting)', trend.bestWeek], ['Best Month', trend.bestMonth]].map(([label, v], i) => (
+            <div key={label} className={`relative overflow-hidden rounded-2xl p-4 text-white shadow-md bg-gradient-to-br ${['from-amber-400 to-orange-500', 'from-pink-500 to-rose-500', 'from-violet-500 to-indigo-600'][i]}`}>
+              <Crown size={56} className="absolute -right-3 -bottom-3 opacity-20" />
+              <p className="text-xs text-white/80 flex items-center gap-1"><Trophy size={12} /> {label} · 180 days</p>
+              <p className="text-xl font-extrabold mt-1">{v ? formatMoney(v[1], cur) : '-'}</p>
+              <p className="text-xs text-white/80">{v ? v[0] : 'No data yet'}</p>
+            </div>
+          ))}
         </div>
-      </Card>
 
-      <Card title="Staff Sales Leaderboard (this period)" actions={<Trophy size={16} className="text-amber-500" />}>
-        {staffLeaderboard.length === 0 ? <EmptyState message="No sales recorded by staff in this period." /> : (
-          <div className="space-y-2">
-            {staffLeaderboard.map((s, idx) => {
-              const maxTotal = staffLeaderboard[0].total || 1
-              return (
-                <div key={s.name + idx}>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="flex items-center gap-2 font-medium">
-                      {idx === 0 && <span>🏆</span>}
-                      {s.name}
-                    </span>
-                    <span className="text-gray-500">{formatMoney(s.total, company.currency)} · {s.count} sales</span>
-                  </div>
-                  <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-2">
-                    <div className="bg-brand h-2 rounded-full" style={{ width: `${(s.total / maxTotal) * 100}%` }} />
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </Card>
-
-      <Card title="Sales Trend (last 30 days)" actions={<Calendar size={16} className="text-gray-400" />}>
-        {trend.daily.length === 0 ? <EmptyState message="No sales in the last 30 days." /> : (
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={trend.daily}>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="date" tick={{ fontSize: 10 }} />
-              <YAxis tick={{ fontSize: 10 }} />
-              <Tooltip formatter={(v) => formatMoney(v, company.currency)} />
-              <Line type="monotone" dataKey="total" stroke="#c2410c" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        )}
-      </Card>
-
-      <Card title="Daily Sales Breakdown (selected period)">
-        {dailyBreakdown.length === 0 ? <EmptyState message="No sales in this period." /> : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead><tr className="text-left text-gray-400 border-b border-gray-100 dark:border-gray-800">
-                <th className="py-2">Date</th><th className="py-2">Total Sales</th><th className="py-2">Transactions</th><th className="py-2">Items Sold</th>
-              </tr></thead>
-              <tbody>
-                {dailyBreakdown.map((d) => (
-                  <tr key={d.date} className="border-b border-gray-50 dark:border-gray-800/50">
-                    <td className="py-2 font-medium">{d.date}</td>
-                    <td className="py-2 font-semibold">{formatMoney(d.total, company.currency)}</td>
-                    <td className="py-2 text-gray-500">{d.transactions}</td>
-                    <td className="py-2 text-gray-500">{d.items}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-
-      <div className="grid lg:grid-cols-3 gap-4">
-        <Card title="Best-Selling Products">
-          {loading ? <p className="text-sm text-gray-400">Loading...</p> : bestSellers.length === 0 ? <EmptyState message="No sales in this period." /> : (
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={bestSellers} layout="vertical" margin={{ left: 20 }}>
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                <XAxis type="number" />
-                <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 10 }} />
-                <Tooltip />
-                <Bar dataKey="qty" fill="#c2410c" radius={[0, 4, 4, 0]} />
-              </BarChart>
+        {/* TREND */}
+        <Panel title="Sales Trend · last 30 days" icon={TrendingUp}>
+          {trend.daily.length === 0 ? <Empty text="No sales in the last 30 days." /> : (
+            <ResponsiveContainer width="100%" height={240}>
+              <AreaChart data={trend.daily} margin={{ left: -10, right: 8, top: 8 }}>
+                <defs>
+                  <linearGradient id="trendFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#f97316" stopOpacity={0.55} />
+                    <stop offset="100%" stopColor="#f97316" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#9ca3af33" />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
+                <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
+                <Tooltip content={<ChartTip currency={cur} />} />
+                <Area type="monotone" dataKey="total" stroke="#ea580c" strokeWidth={3} fill="url(#trendFill)" />
+              </AreaChart>
             </ResponsiveContainer>
           )}
-        </Card>
+        </Panel>
 
-        <Card title="Top Customers (this period)" actions={<Trophy size={16} className="text-amber-500" />}>
-          {topCustomers.length === 0 ? <EmptyState message="No customer sales yet." /> : (
-            <div className="divide-y divide-gray-100 dark:divide-gray-800">
-              {topCustomers.map((c, idx) => (
-                <div key={c.name + idx} className="flex justify-between items-center py-2 text-sm">
-                  <span className="flex items-center gap-2">
-                    <span className="w-5 h-5 rounded-full bg-brand/10 text-brand text-xs font-bold flex items-center justify-center">{idx + 1}</span>
-                    {c.name}
-                  </span>
-                  <span className="font-semibold">{formatMoney(c.total, company.currency)}</span>
-                </div>
-              ))}
+        {/* MONEY IN / OUT + P&L */}
+        <div className="grid lg:grid-cols-2 gap-4">
+          <Panel title="Where the money went" icon={Wallet} tone="text-cyan-500"
+            right={<span className={`text-xs font-bold px-2 py-1 rounded-full ${netCashFlow >= 0 ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30' : 'bg-red-50 text-red-600 dark:bg-red-900/30'}`}>Net {formatMoney(netCashFlow, cur)}</span>}>
+            <FlowBar label="Cash in (sales, debts, consignment)" value={cashIn} max={flowMax} color="from-emerald-400 to-teal-500" sign="+" currency={cur} />
+            <FlowBar label="Expenses" value={totalExpenses} max={flowMax} color="from-rose-400 to-red-500" sign="-" currency={cur} />
+            <FlowBar label="Suppliers" value={cashOutSuppliers} max={flowMax} color="from-orange-400 to-amber-500" sign="-" currency={cur} />
+            <FlowBar label="Personal debts & consignment owners" value={cashOutPersonal} max={flowMax} color="from-fuchsia-400 to-purple-500" sign="-" currency={cur} />
+          </Panel>
+
+          <Panel title="Profit & Loss" icon={DollarSign} tone="text-emerald-500">
+            <Line2 label="Total revenue" value={formatMoney(current?.revenue || 0, cur)} tone="font-medium" />
+            <Line2 label="Cost of goods sold" value={`-${formatMoney(current?.cogs || 0, cur)}`} tone="font-medium text-red-500" />
+            <Line2 label="Gross profit" value={formatMoney(current?.grossProfit || 0, cur)} tone="font-semibold" bold />
+            <Line2 label="Consignment profit" value={`+${formatMoney(consignProfit, cur)}`} tone="font-medium text-emerald-600" />
+            <Line2 label="Operating expenses" value={`-${formatMoney(totalExpenses, cur)}`} tone="font-medium text-red-500" />
+            <div className={`mt-3 rounded-xl px-4 py-3 flex justify-between items-center bg-gradient-to-r ${netProfit >= 0 ? 'from-emerald-500 to-teal-600' : 'from-rose-500 to-red-600'} text-white`}>
+              <span className="text-sm font-semibold">Net profit</span>
+              <span className="text-lg font-extrabold">{formatMoney(netProfit, cur)}</span>
             </div>
-          )}
-        </Card>
-
-        <Card title="Slow-Moving Products (no sales this period)">
-          {slowMovers.length === 0 ? <EmptyState message="Everything is moving!" /> : (
-            <div className="divide-y divide-gray-100 dark:divide-gray-800">
-              {slowMovers.map((p) => (
-                <div key={p.id} className="flex justify-between py-2 text-sm">
-                  <span>{p.name}</span>
-                  <span className="text-gray-400">{p.stock_qty} in stock</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </Card>
-      </div>
-
-      <div className="grid lg:grid-cols-2 gap-4">
-        <Card title="Profit & Loss Summary">
-          <table className="w-full text-sm">
-            <tbody>
-              <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Total Revenue</td><td className="py-2 text-right font-medium">{formatMoney(current?.revenue || 0, company.currency)}</td></tr>
-              <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Cost of Goods Sold</td><td className="py-2 text-right font-medium text-red-500">-{formatMoney(current?.cogs || 0, company.currency)}</td></tr>
-              <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2 font-semibold">Gross Profit</td><td className="py-2 text-right font-semibold">{formatMoney(current?.grossProfit || 0, company.currency)}</td></tr>
-              <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Consignment Profit</td><td className="py-2 text-right font-medium text-emerald-600">+{formatMoney(consignProfit, company.currency)}</td></tr>
-              <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Operating Expenses</td><td className="py-2 text-right font-medium text-red-500">-{formatMoney(totalExpenses, company.currency)}</td></tr>
-              <tr><td className="py-2 font-bold">Net Profit</td><td className={`py-2 text-right font-bold ${netProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(netProfit, company.currency)}</td></tr>
-            </tbody>
-          </table>
-        </Card>
-
-        <Card title="Cash Flow (this period)">
-          <table className="w-full text-sm">
-            <tbody>
-              <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Cash In (sales, debt payments &amp; consignment sales)</td><td className="py-2 text-right font-medium text-emerald-600">+{formatMoney(cashIn, company.currency)}</td></tr>
-              <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Cash Out — Expenses</td><td className="py-2 text-right font-medium text-red-500">-{formatMoney(totalExpenses, company.currency)}</td></tr>
-              <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Cash Out — Supplier Payments (incl. paid when ordering)</td><td className="py-2 text-right font-medium text-red-500">-{formatMoney(cashOutSuppliers, company.currency)}</td></tr>
-              <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-2">Cash Out — Personal Debts &amp; Consignment Owners</td><td className="py-2 text-right font-medium text-red-500">-{formatMoney(cashOutPersonal, company.currency)}</td></tr>
-              <tr><td className="py-2 font-bold">Net Cash Flow</td><td className={`py-2 text-right font-bold ${netCashFlow >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatMoney(netCashFlow, company.currency)}</td></tr>
-            </tbody>
-          </table>
-        </Card>
-      </div>
-
-      <Card title="Balance Sheet (snapshot as of today)" actions={<Scale size={16} className="text-gray-400" />}>
-        <div className="grid sm:grid-cols-2 gap-6">
-          <div>
-            <p className="text-sm font-semibold text-gray-600 dark:text-gray-300 mb-2">Assets</p>
-            <table className="w-full text-sm">
-              <tbody>
-                <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-1.5">Inventory (at cost)</td><td className="py-1.5 text-right">{formatMoney(stockValuation, company.currency)}</td></tr>
-                <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-1.5">Accounts Receivable (customer debts)</td><td className="py-1.5 text-right">{formatMoney(receivables, company.currency)}</td></tr>
-                <tr><td className="py-1.5 font-semibold">Total Assets</td><td className="py-1.5 text-right font-semibold">{formatMoney(stockValuation + receivables, company.currency)}</td></tr>
-              </tbody>
-            </table>
-          </div>
-          <div>
-            <p className="text-sm font-semibold text-gray-600 dark:text-gray-300 mb-2">Liabilities &amp; Position</p>
-            <table className="w-full text-sm">
-              <tbody>
-                <tr className="border-b border-gray-100 dark:border-gray-800"><td className="py-1.5">Accounts Payable (owed to suppliers)</td><td className="py-1.5 text-right text-red-500">{formatMoney(payables, company.currency)}</td></tr>
-                <tr><td className="py-1.5 font-bold">Net Position (Assets − Liabilities)</td><td className="py-1.5 text-right font-bold">{formatMoney(stockValuation + receivables - payables, company.currency)}</td></tr>
-              </tbody>
-            </table>
-          </div>
+          </Panel>
         </div>
-        <p className="text-xs text-gray-400 mt-3">Simplified for a single-shop operation — doesn't track cash-on-hand/bank balances separately (see the Cash &amp; Bank page for that).</p>
-      </Card>
+
+        {/* LEADERBOARDS */}
+        <div className="grid lg:grid-cols-2 gap-4">
+          <Panel title="Staff Leaderboard" icon={Trophy} tone="text-amber-500">
+            {staffLeaderboard.length === 0 ? <Empty text="No sales recorded by staff in this period." /> : (
+              <div className="space-y-3">
+                {staffLeaderboard.map((st, idx) => (
+                  <div key={st.name + idx}>
+                    <div className="flex justify-between items-center text-sm mb-1">
+                      <span className="flex items-center gap-2 font-medium text-gray-800 dark:text-gray-100"><span className="text-lg">{MEDALS[idx] || '🏅'}</span>{st.name}</span>
+                      <span className="text-xs text-gray-500">{formatMoney(st.total, cur)} · {st.count} sales</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
+                      <div className="h-full rounded-full bg-gradient-to-r from-amber-400 to-orange-500 transition-all duration-700" style={{ width: `${(st.total / (staffLeaderboard[0].total || 1)) * 100}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+
+          <Panel title="Top Customers" icon={Crown} tone="text-pink-500">
+            {topCustomers.length === 0 ? <Empty text="No customer sales yet." /> : (
+              <div>
+                {topCustomers.map((c, idx) => (
+                  <div key={c.name + idx} className="flex justify-between items-center py-2 text-sm border-b border-gray-100 dark:border-gray-800 last:border-0">
+                    <span className="flex items-center gap-2.5 text-gray-800 dark:text-gray-100">
+                      <span className={`w-7 h-7 rounded-full text-xs font-bold flex items-center justify-center text-white bg-gradient-to-br ${idx === 0 ? 'from-amber-400 to-orange-500' : idx === 1 ? 'from-gray-400 to-gray-500' : idx === 2 ? 'from-orange-300 to-amber-600' : 'from-blue-400 to-indigo-500'}`}>{idx + 1}</span>
+                      {c.name}
+                    </span>
+                    <span className="font-semibold">{formatMoney(c.total, cur)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+        </div>
+
+        {/* PRODUCTS */}
+        <div className="grid lg:grid-cols-2 gap-4">
+          <Panel title="Best-Selling Products" icon={Package} tone="text-purple-500">
+            {loading ? <div className="h-52 rounded-xl bg-gray-100 dark:bg-gray-800 animate-pulse" /> : bestSellers.length === 0 ? <Empty text="No sales in this period." /> : (
+              <ResponsiveContainer width="100%" height={Math.max(200, bestSellers.length * 34)}>
+                <BarChart data={bestSellers} layout="vertical" margin={{ left: 10, right: 12 }}>
+                  <defs>
+                    <linearGradient id="barFill" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stopColor="#f97316" />
+                      <stop offset="100%" stopColor="#e11d48" />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#9ca3af33" />
+                  <XAxis type="number" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
+                  <Tooltip cursor={{ fill: '#9ca3af22' }} />
+                  <Bar dataKey="qty" fill="url(#barFill)" radius={[0, 8, 8, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </Panel>
+
+          <Panel title="Slow-Moving · no sales this period" icon={TrendingDown} tone="text-red-500">
+            {slowMovers.length === 0 ? <Empty text="Everything is moving! 🎉" /> : (
+              <div>
+                {slowMovers.map((p) => (
+                  <div key={p.id} className="flex justify-between items-center py-2 text-sm border-b border-gray-100 dark:border-gray-800 last:border-0">
+                    <span className="text-gray-800 dark:text-gray-100">{p.name}</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400">{p.stock_qty} in stock</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+        </div>
+
+        {/* DAILY BREAKDOWN */}
+        <Panel title="Daily Sales Breakdown" icon={DollarSign} tone="text-blue-500">
+          {dailyBreakdown.length === 0 ? <Empty text="No sales in this period." /> : (
+            <div className="max-h-96 overflow-auto rounded-xl">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-white dark:bg-gray-900">
+                  <tr className="text-left text-xs text-gray-400 border-b border-gray-100 dark:border-gray-800">
+                    <th className="py-2 pr-3">Date</th><th className="py-2 pr-3">Total</th><th className="py-2 pr-3 hidden sm:table-cell w-1/3"></th><th className="py-2 pr-3">Sales</th><th className="py-2">Items</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dailyBreakdown.map((d) => (
+                    <tr key={d.date} className="border-b border-gray-50 dark:border-gray-800/50">
+                      <td className="py-2 pr-3 font-medium whitespace-nowrap">{d.date}</td>
+                      <td className="py-2 pr-3 font-semibold whitespace-nowrap">{formatMoney(d.total, cur)}</td>
+                      <td className="py-2 pr-3 hidden sm:table-cell">
+                        <div className="h-1.5 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-orange-400 to-rose-500" style={{ width: `${(d.total / dayMax) * 100}%` }} /></div>
+                      </td>
+                      <td className="py-2 pr-3 text-gray-500">{d.transactions}</td>
+                      <td className="py-2 text-gray-500">{d.items}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+
+        {/* BALANCE SHEET */}
+        <Panel title="Balance Sheet · snapshot as of today" icon={Scale} tone="text-gray-400">
+          <div className="grid sm:grid-cols-3 gap-3">
+            <div className="rounded-xl p-4 bg-emerald-50 dark:bg-emerald-900/20">
+              <p className="text-xs text-emerald-700 dark:text-emerald-400 font-semibold mb-2">ASSETS</p>
+              <Line2 label="Inventory (at cost)" value={formatMoney(stockValuation, cur)} />
+              <Line2 label="Customer debts" value={formatMoney(receivables, cur)} />
+              <Line2 label="Total assets" value={formatMoney(stockValuation + receivables, cur)} tone="font-bold" bold />
+            </div>
+            <div className="rounded-xl p-4 bg-red-50 dark:bg-red-900/20">
+              <p className="text-xs text-red-700 dark:text-red-400 font-semibold mb-2">LIABILITIES</p>
+              <Line2 label="Owed to suppliers" value={formatMoney(payables, cur)} tone="text-red-500 font-medium" />
+            </div>
+            <div className={`rounded-xl p-4 text-white bg-gradient-to-br flex flex-col justify-center ${stockValuation + receivables - payables >= 0 ? 'from-indigo-500 to-purple-600' : 'from-rose-500 to-red-600'}`}>
+              <p className="text-xs text-white/80">Net position (assets − liabilities)</p>
+              <p className="text-xl font-extrabold">{formatMoney(stockValuation + receivables - payables, cur)}</p>
+            </div>
+          </div>
+          <p className="text-xs text-gray-400 mt-3">Simplified for a single-shop operation — doesn't track cash-on-hand/bank balances separately (see the Cash &amp; Bank page for that).</p>
+        </Panel>
+      </div>
     </div>
   )
 }
