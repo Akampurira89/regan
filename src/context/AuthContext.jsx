@@ -36,6 +36,7 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
   const [blockedReason, setBlockedReason] = useState(null)
+  const [daysLeft, setDaysLeft] = useState(null)
   const watchersRef = useRef([])
 
   const [viewingAs, setViewingAs] = useState(null)
@@ -101,6 +102,9 @@ export function AuthProvider({ children }) {
       }
     })
     const unsubTenant = onSnapshot(doc(db, 'tenants', link.tenantId), (s) => {
+      const td = s.exists() ? s.data() : null
+      const end = td?.subscriptionStatus === 'trial' ? td.trialEndsAt : td?.nextBillingDate
+      setDaysLeft(end ? Math.ceil((end.toMillis() - Date.now()) / 86400000) : null)
       if (!isTenantPaidUp(s.exists() ? s.data() : null)) {
         setBlockedReason(s.exists() && s.data().subscriptionStatus === 'trial' ? 'trial_expired' : 'suspended')
         signOut(auth)
@@ -168,7 +172,7 @@ export function AuthProvider({ children }) {
   }
 
   const value = {
-    session: user, profile, loading, blockedReason, login, logout, can,
+    session: user, profile, loading, blockedReason, daysLeft, login, logout, can,
     viewingAs, viewAsShop, exitViewAs, activeTenantId,
   }
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
