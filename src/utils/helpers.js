@@ -1,5 +1,5 @@
 import { collection, addDoc, query, where, getCountFromServer, serverTimestamp, Timestamp } from 'firebase/firestore'
-import { db } from '../lib/firebase'
+import { db, tPath } from '../lib/firebase'
 
 export function formatMoney(amount, currency = 'UGX') {
   const n = Number(amount || 0)
@@ -42,7 +42,7 @@ export async function generateSequenceNumber(prefix, pathSegments, dateField = '
 
 export async function logAudit({ userId, action, entityType, entityId, oldValues, newValues }) {
   try {
-    await addDoc(collection(db, 'auditLogs'), {
+    await addDoc(collection(db, ...tPath('auditLogs')), {
       user_id: userId || null,
       action,
       entity_type: entityType,
