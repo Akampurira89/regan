@@ -86,7 +86,7 @@ export function SettingsProvider({ children }) {
     if (compSnap.exists()) setCompany({ ...DEFAULT_COMPANY, ...compSnap.data() })
     else await setDoc(doc(db, ...tPath('settings', 'company')), DEFAULT_COMPANY)
 
-    await seedDefaultsIfEmpty()
+    try { await seedDefaultsIfEmpty() } catch (e) { console.error('Default categories not added', e) }
     setLoading(false)
   }, [activeTenantId])
 
