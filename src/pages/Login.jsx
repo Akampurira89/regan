@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { hasOwnerContact, ownerWhatsAppLink } from '../lib/contact'
 import { useNavigate } from 'react-router-dom'
 import { sendPasswordResetEmail } from 'firebase/auth'
 import { auth } from '../lib/firebase'
@@ -62,6 +63,12 @@ export default function Login() {
           <p className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-lg mb-3">
             {BLOCK_MESSAGES[blockedReason] || 'Access denied.'}
           </p>
+        )}
+        {blockedReason && hasOwnerContact() && (
+          <a href={ownerWhatsAppLink('Hello, my shop is locked out of the system. Please help.')} target="_blank" rel="noreferrer"
+            className="block text-center text-sm font-medium text-white bg-gradient-to-r from-emerald-500 to-green-600 rounded-lg py-2 mb-3 hover:opacity-90">
+            Contact us on WhatsApp
+          </a>
         )}
 
         {!resetMode ? (
