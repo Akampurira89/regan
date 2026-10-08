@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Plus, Landmark, Wallet, ArrowRightLeft } from 'lucide-react'
 import { collection, getDocs, addDoc, query, orderBy, serverTimestamp } from 'firebase/firestore'
 import { db, tPath } from '../lib/firebase'
@@ -20,6 +20,15 @@ export default function CashBank() {
   const [openingCash, setOpeningCash] = useState('')
   const [openingBank, setOpeningBank] = useState('')
 
+  // Blocks double-taps: the ref flips instantly, state would not
+  const busy = useRef(false)
+  const once = (fn) => async (...args) => {
+    args[0]?.preventDefault?.()
+    if (busy.current) return
+    busy.current = true
+    try { await fn(...args) } finally { busy.current = false }
+  }
+
   const load = async () => {
     setLoading(true)
     const snap = await getDocs(query(collection(db, ...tPath('cashBankLedger')), orderBy('created_at', 'desc')))
@@ -35,7 +44,7 @@ export default function CashBank() {
   const cashBalance = openingCashBal - movedToBank + movedToCash
   const bankBalance = openingBankBal + movedToBank - movedToCash
 
-  const save = async (e) => {
+  const save = once(async (e) => {
     e.preventDefault()
     const amount = Number(form.amount)
     if (!amount || amount <= 0) return
@@ -44,7 +53,7 @@ export default function CashBank() {
     await logAudit({ userId: profile?.id, action: 'create', entityType: 'cashBankLedger', entityId: ref.id, newValues: payload })
     setModalOpen(false); setForm(empty)
     load()
-  }
+  })
 
   const saveOpening = async (e) => {
     e.preventDefault()
