@@ -1,5 +1,5 @@
 import { collection, getDocs, writeBatch, doc } from 'firebase/firestore'
-import { db } from './firebase'
+import { db, tPath } from './firebase'
 
 const DEFAULT_CATEGORIES = ['Phones', 'TVs', 'Fridges', 'Deep Freezers', 'Woofers', 'Fridge Guards', 'Accessories']
 const DEFAULT_EXPENSE_CATEGORIES = ['Rent', 'Utilities', 'Transport', 'Salaries', 'Repairs & Maintenance', 'Other']
@@ -9,8 +9,8 @@ const DEFAULT_EXPENSE_CATEGORIES = ['Rent', 'Utilities', 'Transport', 'Salaries'
 // has no seed data built in the way the Supabase schema.sql did.
 export async function seedDefaultsIfEmpty() {
   const [catSnap, expCatSnap] = await Promise.all([
-    getDocs(collection(db, 'categories')),
-    getDocs(collection(db, 'expenseCategories')),
+    getDocs(collection(db, ...tPath('categories'))),
+    getDocs(collection(db, ...tPath('expenseCategories'))),
   ])
 
   const batch = writeBatch(db)
@@ -18,14 +18,14 @@ export async function seedDefaultsIfEmpty() {
 
   if (catSnap.empty) {
     DEFAULT_CATEGORIES.forEach((name) => {
-      batch.set(doc(collection(db, 'categories')), { name })
+      batch.set(doc(collection(db, ...tPath('categories'))), { name })
     })
     needsCommit = true
   }
 
   if (expCatSnap.empty) {
     DEFAULT_EXPENSE_CATEGORIES.forEach((name) => {
-      batch.set(doc(collection(db, 'expenseCategories')), { name })
+      batch.set(doc(collection(db, ...tPath('expenseCategories'))), { name })
     })
     needsCommit = true
   }
