@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Plus, HandCoins, CheckCircle2, Wallet } from 'lucide-react'
 import { collection, getDocs, addDoc, updateDoc, doc, serverTimestamp } from 'firebase/firestore'
 import { db, tPath } from '../lib/firebase'
@@ -21,6 +21,15 @@ export default function Consignment() {
   const [saleCustomer, setSaleCustomer] = useState('')
   const [payModal, setPayModal] = useState(null)
 
+  // Blocks double-taps: the ref flips instantly, state would not
+  const busy = useRef(false)
+  const once = (fn) => async (...args) => {
+    args[0]?.preventDefault?.()
+    if (busy.current) return
+    busy.current = true
+    try { await fn(...args) } finally { busy.current = false }
+  }
+
   const load = async () => {
     setLoading(true)
     const snap = await getDocs(collection(db, ...tPath('consignmentItems')))
@@ -29,7 +38,7 @@ export default function Consignment() {
   }
   useEffect(() => { load() }, [])
 
-  const addItem = async (e) => {
+  const addItem = once(async (e) => {
     e.preventDefault()
     const payload = {
       description: form.description, owner_name: form.owner_name, owner_phone: form.owner_phone,
@@ -39,9 +48,9 @@ export default function Consignment() {
     await logAudit({ userId: profile?.id, action: 'create', entityType: 'consignmentItems', entityId: ref.id, newValues: payload })
     setAddModalOpen(false); setForm(empty)
     load()
-  }
+  })
 
-  const markSold = async (e) => {
+  const markSold = once(async (e) => {
     e.preventDefault()
     const amount = Number(saleAmount)
     if (!amount) return
@@ -51,15 +60,16 @@ export default function Consignment() {
     await logAudit({ userId: profile?.id, action: 'update', entityType: 'consignmentItems', entityId: sellModal.id, newValues: { status: 'sold', sale_amount: amount } })
     setSellModal(null); setSaleAmount(''); setSaleCustomer('')
     load()
-  }
+  })
 
-  const markPaid = async (item) => {
+  const markPaid = once(async (item) => {
+    if (item.status === 'paid') return
     if (!confirm(`Confirm you've paid ${item.owner_name} ${formatMoney(item.owner_amount, company.currency)} for "${item.description}"?`)) return
     await updateDoc(doc(db, ...tPath('consignmentItems', item.id)), { status: 'paid', paid_at: serverTimestamp() })
     await addDoc(collection(db, ...tPath('payments')), { reference_type: 'consignment_owner', reference_id: item.id, amount: item.owner_amount, method: 'cash', received_by: profile?.id, created_at: serverTimestamp() })
     await logAudit({ userId: profile?.id, action: 'payment', entityType: 'consignmentItems', entityId: item.id, newValues: { amount: item.owner_amount } })
     load()
-  }
+  })
 
   const statusBadge = (status) => {
     if (status === 'available') return <Badge color="blue">Available</Badge>
