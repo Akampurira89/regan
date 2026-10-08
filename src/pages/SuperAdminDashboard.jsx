@@ -8,6 +8,7 @@ import { Store, CheckCircle2, XCircle, Search, Plus, LogOut, Sparkles, Pencil, T
 
 const TRIAL_DAYS = 30
 const MONTHLY_FEE = 50000
+const WARN_DAYS = 5
 
 const STATUS_STYLES = {
   active: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400',
@@ -41,6 +42,10 @@ function statusLabel(t) {
   if (t.subscriptionStatus === 'active') {
     if (t.nextBillingDate && t.nextBillingDate.toMillis() < now) {
       return { text: 'Payment overdue', style: STATUS_STYLES.expired }
+    }
+    if (t.nextBillingDate) {
+      const daysLeft = Math.ceil((t.nextBillingDate.toMillis() - now) / 86400000)
+      if (daysLeft <= WARN_DAYS) return { text: `Due in ${daysLeft}d`, style: STATUS_STYLES.trial }
     }
     return { text: 'Active', style: STATUS_STYLES.active }
   }
@@ -84,14 +89,16 @@ export default function SuperAdminDashboard() {
 
   const stats = useMemo(() => {
     const now = Date.now()
-    let active = 0, needsAttention = 0
+    let active = 0, needsAttention = 0, dueSoon = 0
     tenants.forEach((t) => {
+      const l = statusLabel(t).text
+      if (l.startsWith('Due in') || (l.startsWith('Trial') && parseInt(l.split('·')[1]) <= WARN_DAYS)) dueSoon++
       const trialValid = t.subscriptionStatus === 'trial' && t.trialEndsAt && t.trialEndsAt.toMillis() > now
       const billingValid = t.subscriptionStatus === 'active' && (!t.nextBillingDate || t.nextBillingDate.toMillis() > now)
       if (trialValid || billingValid) active++
       else needsAttention++
     })
-    return { total: tenants.length, active, needsAttention }
+    return { total: tenants.length, active, needsAttention, dueSoon }
   }, [tenants])
 
   // "Suspend" always fully locks a shop out. "Activate" marks this month as
@@ -109,6 +116,21 @@ export default function SuperAdminDashboard() {
     } else {
       await updateDoc(doc(db, 'tenants', t.id), { subscriptionStatus: 'expired' })
     }
+    load()
+  }
+
+  // Early payment: adds 30 days on top of the current end date, so nobody
+  // loses the days they have left. Locked shops use toggleStatus instead.
+  const extend30 = async (t) => {
+    const now = Date.now()
+    const base = t.subscriptionStatus === 'trial' && t.trialEndsAt
+      ? Math.max(t.trialEndsAt.toMillis(), now)
+      : Math.max(t.nextBillingDate ? t.nextBillingDate.toMillis() : now, now)
+    await updateDoc(doc(db, 'tenants', t.id), {
+      subscriptionStatus: 'active',
+      nextBillingDate: Timestamp.fromDate(addDays(new Date(base), 30)),
+      monthlyFee: MONTHLY_FEE,
+    })
     load()
   }
 
@@ -239,6 +261,12 @@ export default function SuperAdminDashboard() {
           <StatCard icon={XCircle} label="Needs Attention" value={stats.needsAttention} color="text-red-600 bg-red-50 dark:bg-red-900/30" />
         </div>
 
+        {stats.dueSoon > 0 && (
+          <div className="mb-4 rounded-xl bg-yellow-50 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-300 text-sm px-4 py-3">
+            {stats.dueSoon} shop{stats.dueSoon > 1 ? 's' : ''} will need payment within {WARN_DAYS} days.
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-3 mb-4">
           <div className="relative flex-1 min-w-[180px]">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -285,6 +313,11 @@ export default function SuperAdminDashboard() {
                       {label.text}
                     </span>
                     <div className="flex items-center gap-1 shrink-0">
+                      {!locked && (
+                        <button onClick={() => extend30(t)} className="text-xs font-medium text-green-600 hover:underline px-1.5">
+                          +30 days (paid)
+                        </button>
+                      )}
                       <button onClick={() => toggleStatus(t)} className="text-xs font-medium text-blue-600 hover:underline px-1.5">
                         {locked ? 'Activate (mark paid)' : 'Suspend'}
                       </button>
