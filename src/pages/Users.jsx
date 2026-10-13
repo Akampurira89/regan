@@ -5,7 +5,7 @@ import { db, tPath } from '../lib/firebase'
 import { createStaffAuthAccount } from '../lib/createStaffAccount'
 import { Card, Badge, EmptyState, Button, Modal, Input, Select } from '../components/ui/ui'
 import { formatDate, logAudit } from '../utils/helpers'
-import { useAuth } from '../context/AuthContext'
+import { useAuth, isOwnerRole } from '../context/AuthContext'
 
 const empty = { full_name: '', email: '', password: '', role: 'cashier', phone: '' }
 
@@ -78,6 +78,10 @@ export default function Users() {
     }
   }
 
+  if (!isOwnerRole(profile?.role) && profile?.role !== 'super_admin') {
+    return <p className="text-center py-16 text-sm text-gray-500">Only the shop owner or an admin can manage staff and roles.</p>
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -101,23 +105,33 @@ export default function Users() {
                     <td className="py-2 font-medium">{u.full_name}</td>
                     <td className="py-2 text-gray-500">{u.phone || '-'}</td>
                     <td className="py-2">
-                      <select value={u.role} onChange={(e) => changeRole(u, e.target.value)} className="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 dark:bg-gray-800 capitalize">
-                        <option value="admin">Admin</option>
-                        <option value="manager">Manager</option>
-                        <option value="cashier">Cashier</option>
-                        <option value="technician">Technician</option>
-                      </select>
+                      {u.role === 'owner' ? (
+                        <span className="text-xs font-bold px-2 py-1 rounded-full bg-amber-100 text-amber-700">👑 Owner</span>
+                      ) : (
+                        <select value={u.role} disabled={u.id === profile?.id} onChange={(e) => changeRole(u, e.target.value)} className="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 dark:bg-gray-800 capitalize disabled:opacity-50">
+                          <option value="admin">Admin</option>
+                          <option value="manager">Manager</option>
+                          <option value="cashier">Cashier</option>
+                          <option value="technician">Technician</option>
+                        </select>
+                      )}
                     </td>
                     <td className="py-2">
-                      <button onClick={() => toggleActive(u)}>
-                        <Badge color={u.is_active ? 'green' : 'red'}>{u.is_active ? 'Active' : 'Disabled'}</Badge>
-                      </button>
+                      {u.role === 'owner' || u.id === profile?.id ? (
+                        <Badge color="green">Active</Badge>
+                      ) : (
+                        <button onClick={() => toggleActive(u)}>
+                          <Badge color={u.is_active ? 'green' : 'red'}>{u.is_active ? 'Active' : 'Disabled'}</Badge>
+                        </button>
+                      )}
                     </td>
                     <td className="py-2 text-gray-500">{formatDate(u.created_at)}</td>
                     <td className="py-2 text-right">
+                      {u.role === 'owner' || u.id === profile?.id ? <span className="text-gray-300">-</span> : (
                       <button onClick={() => removeStaff(u)} className="p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600" title="Remove completely">
-                        <Trash2 size={15} />
-                      </button>
+                          <Trash2 size={15} />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
