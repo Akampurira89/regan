@@ -5,7 +5,7 @@ import {
   Wallet, BarChart3, UserCog, Settings as SettingsIcon, ClipboardList,
   Database, Menu, X, LogOut, Moon, Sun, Receipt, Calculator, HandCoins, Landmark, Eye,
 } from 'lucide-react'
-import { useAuth } from '../../context/AuthContext'
+import { useAuth, isOwnerRole } from '../../context/AuthContext'
 import { useSettings } from '../../context/SettingsContext'
 import CalculatorModal from '../ui/CalculatorModal'
 import HelpButton from '../ui/HelpButton'
@@ -50,7 +50,7 @@ export default function DashboardLayout() {
   // admin — adminOnly items included — since they're seeing exactly what the
   // real admin would see.
   const visibleNav = NAV.filter((item) =>
-    item.adminOnly ? (profile?.role === 'admin' || (profile?.role === 'super_admin' && viewingAs)) : can(item.key)
+    item.adminOnly ? (isOwnerRole(profile?.role) || (profile?.role === 'super_admin' && viewingAs)) : can(item.key)
   )
 
   return (
