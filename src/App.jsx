@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { SettingsProvider } from './context/SettingsContext'
@@ -5,24 +6,25 @@ import ProtectedRoute from './components/layout/ProtectedRoute'
 import DashboardLayout from './components/layout/DashboardLayout'
 
 import Login from './pages/Login'
-import Dashboard from './pages/Dashboard'
-import Products from './pages/Products'
-import Sales from './pages/Sales'
-import Purchases from './pages/Purchases'
-import Customers from './pages/Customers'
-import Suppliers from './pages/Suppliers'
-import Debts from './pages/Debts'
-import Consignment from './pages/Consignment'
-import CashBank from './pages/CashBank'
-import Reports from './pages/Reports'
-import Users from './pages/Users'
-import Settings from './pages/Settings'
-import AuditLog from './pages/AuditLog'
-import BackupExport from './pages/BackupExport'
-import ReceiptSettings from './pages/receipts/ReceiptSettings'
-import ReceiptHistory from './pages/receipts/ReceiptHistory'
-import SuperAdminDashboard from './pages/SuperAdminDashboard'
-import TenantDetail from './pages/TenantDetail'
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Products = lazy(() => import('./pages/Products'))
+const Sales = lazy(() => import('./pages/Sales'))
+const Purchases = lazy(() => import('./pages/Purchases'))
+const Customers = lazy(() => import('./pages/Customers'))
+const Suppliers = lazy(() => import('./pages/Suppliers'))
+const Debts = lazy(() => import('./pages/Debts'))
+const Consignment = lazy(() => import('./pages/Consignment'))
+const CashBank = lazy(() => import('./pages/CashBank'))
+const Reports = lazy(() => import('./pages/Reports'))
+const Users = lazy(() => import('./pages/Users'))
+const Settings = lazy(() => import('./pages/Settings'))
+const AuditLog = lazy(() => import('./pages/AuditLog'))
+const BackupExport = lazy(() => import('./pages/BackupExport'))
+const ReceiptSettings = lazy(() => import('./pages/receipts/ReceiptSettings'))
+const ReceiptHistory = lazy(() => import('./pages/receipts/ReceiptHistory'))
+const SuperAdminDashboard = lazy(() => import('./pages/SuperAdminDashboard'))
+const TenantDetail = lazy(() => import('./pages/TenantDetail'))
+const ErrorReports = lazy(() => import('./pages/ErrorReports'))
 
 function SuperAdminRoute({ children }) {
   const { session, profile, loading } = useAuth()
@@ -47,9 +49,11 @@ export default function App() {
     <AuthProvider>
       <SettingsProvider>
         <BrowserRouter>
+          <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-gray-400 text-sm">Loading...</div>}>
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/admin" element={<SuperAdminRoute><SuperAdminDashboard /></SuperAdminRoute>} />
+            <Route path="/admin/errors" element={<SuperAdminRoute><ErrorReports /></SuperAdminRoute>} />
             <Route path="/admin/shop/:tenantId" element={<SuperAdminRoute><TenantDetail /></SuperAdminRoute>} />
             <Route
               path="/"
@@ -77,6 +81,7 @@ export default function App() {
               <Route path="backup" element={<ProtectedRoute pageKey="backup"><BackupExport /></ProtectedRoute>} />
             </Route>
           </Routes>
+          </Suspense>
         </BrowserRouter>
       </SettingsProvider>
     </AuthProvider>
