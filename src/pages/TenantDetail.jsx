@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { collection, getDocs, doc, getDoc } from 'firebase/firestore'
+import { collection, getDocs, doc, getDoc, updateDoc } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 import { useAuth } from '../context/AuthContext'
 import { ArrowLeft, DollarSign, ShoppingCart, Package, Users2, UserCog, LayoutDashboard } from 'lucide-react'
@@ -18,6 +18,7 @@ export default function TenantDetail() {
   const [tenant, setTenant] = useState(null)
   const [stats, setStats] = useState(null)
   const [recentSales, setRecentSales] = useState([])
+  const [staff, setStaff] = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -33,6 +34,7 @@ export default function TenantDetail() {
         getDocs(collection(db, 'tenants', tenantId, 'customers')),
       ])
 
+      setStaff(profilesSnap.docs.map((d) => ({ id: d.id, ...d.data() })))
       const sales = salesSnap.docs.map((d) => ({ id: d.id, ...d.data() }))
       const totalRevenue = sales.reduce((sum, s) => sum + (Number(s.total) || 0), 0)
 
@@ -51,6 +53,13 @@ export default function TenantDetail() {
     }
     load()
   }, [tenantId])
+
+  // Gives an existing shop's main account the Owner role (needed for the "start fresh" reset)
+  const makeOwner = async (u) => {
+    if (!confirm(`Make ${u.full_name || 'this person'} the Owner of this shop?`)) return
+    await updateDoc(doc(db, 'tenants', tenantId, 'profiles', u.id), { role: 'owner' })
+    setStaff((list) => list.map((x) => (x.id === u.id ? { ...x, role: 'owner' } : x)))
+  }
 
   const openFullDashboard = () => {
     viewAsShop(tenantId, tenant?.shopName || tenantId)
@@ -97,6 +106,20 @@ export default function TenantDetail() {
           <StatCard icon={Package} label="Products" value={stats.productCount} color="text-purple-600 bg-purple-50 dark:bg-purple-900/30" />
           <StatCard icon={Users2} label="Customers" value={stats.customerCount} color="text-amber-600 bg-amber-50 dark:bg-amber-900/30" />
           <StatCard icon={UserCog} label="Staff" value={stats.staffCount} color="text-pink-600 bg-pink-50 dark:bg-pink-900/30" />
+        </div>
+
+        <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-800 p-4 mb-4">
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-3">Staff accounts</h2>
+          <div className="divide-y divide-gray-100 dark:divide-gray-800">
+            {staff.map((u) => (
+              <div key={u.id} className="flex justify-between items-center py-2 text-sm">
+                <span className="text-gray-800 dark:text-gray-100">{u.full_name || u.id} <span className="text-xs text-gray-400 capitalize">· {u.role}</span></span>
+                {u.role === 'admin' && !staff.some((x) => x.role === 'owner') && (
+                  <button onClick={() => makeOwner(u)} className="text-xs font-medium text-amber-600 hover:underline">Make owner</button>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-800 p-4">
