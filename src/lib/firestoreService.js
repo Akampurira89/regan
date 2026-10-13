@@ -45,3 +45,37 @@ export function listenAll(name, constraints, cb) {
 
 // Re-export common Firestore query builders so pages don't need a second import line
 export { where, orderBy, qLimit as limit, serverTimestamp, increment, writeBatch, runTransaction }
+
+// ==========================================
+// FIX FOR ResetShopCard MODULE IMPORT ERRORS
+// ==========================================
+
+export const RESET_COLLECTIONS = [
+  'errorLogs',
+  'sales',
+  'cashReconciliation'
+]
+
+export async function buildBackup() {
+  try {
+    const backupData = {}
+    for (const colName of RESET_COLLECTIONS) {
+      backupData[colName] = await getAllDocs(colName)
+    }
+    return backupData
+  } catch (error) {
+    console.error("Failed to generate backup data:", error)
+    throw error
+  }
+}
+
+export async function wipeShopData() {
+  const batch = writeBatch()
+  for (const colName of RESET_COLLECTIONS) {
+    const docs = await getAllDocs(colName)
+    docs.forEach((d) => {
+      batch.delete(docRef(colName, d.id))
+    })
+  }
+  await batch.commit()
+}
