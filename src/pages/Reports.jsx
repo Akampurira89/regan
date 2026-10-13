@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, AreaChart, Area } from 'recharts'
-import { collection, getDocs, query, where, Timestamp } from 'firebase/firestore'
+import { collection, getDocs, query, where, Timestamp, writeBatch, doc } from 'firebase/firestore'
 import { db, tPath } from '../lib/firebase'
 import { formatMoney, exportToCSV } from '../utils/helpers'
 import { useSettings } from '../context/SettingsContext'
+import { useAuth, isOwnerRole } from '../context/AuthContext'
 import { DollarSign, TrendingUp, TrendingDown, Package, Scale, Trophy, Download, Crown, Wallet, ArrowDownRight, ArrowUpRight, Sparkles } from 'lucide-react'
 
 // Local (shop) calendar date as YYYY-MM-DD. toISOString() gives the UTC date, which
@@ -37,6 +38,38 @@ const weekKey = (d) => {
 }
 const monthKey = (d) => localDateStr(d?.toDate ? d.toDate() : new Date(d)).slice(0, 7)
 
+const toSummary = (d) => {
+  const x = d.data()
+  return { product_id: x.product_id || null, product_name: x.product_name || '', qty: Number(x.qty) || 0, rate: Number(x.rate) || 0, amount: Number(x.amount) || 0, cost_price: Number(x.cost_price) || 0 }
+}
+
+// Reads the items of OLD sales (made before items_summary existed), 25 at a time
+async function loadLegacyItems(sales) {
+  const out = new Map()
+  for (let i = 0; i < sales.length; i += 25) {
+    const group = sales.slice(i, i + 25)
+    // eslint-disable-next-line no-await-in-loop
+    const res = await Promise.all(group.map((s) => getDocs(collection(db, ...tPath('sales', s.id, 'items')))))
+    group.forEach((s, idx) => out.set(s.id, res[idx].docs.map(toSummary)))
+  }
+  return out
+}
+
+// Saves the compact copy onto old sales so the next report is fast. Failure is harmless.
+async function saveSummaries(map) {
+  try {
+    const ids = [...map.keys()]
+    for (let i = 0; i < ids.length; i += 100) {
+      const batch = writeBatch(db)
+      ids.slice(i, i + 100).forEach((id) => batch.update(doc(db, ...tPath('sales', id)), { items_summary: map.get(id) }))
+      // eslint-disable-next-line no-await-in-loop
+      await batch.commit()
+    }
+  } catch (e) {
+    console.warn('Could not upgrade old sales for faster reports', e)
+  }
+}
+
 async function loadPeriodFinancials(start, end) {
   const salesSnap = await getDocs(query(collection(db, ...tPath('sales')), where('created_at', '>=', Timestamp.fromDate(start)), where('created_at', '<=', Timestamp.fromDate(end))))
   const salesData = salesSnap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((s) => s.status !== 'void')
@@ -46,8 +79,12 @@ async function loadPeriodFinancials(start, end) {
   let saleItems = []
   let salesWithItems = salesData
   if (salesData.length > 0) {
-    const itemsArrays = await Promise.all(salesData.map((s) => getDocs(collection(db, ...tPath('sales', s.id, 'items')))))
-    salesWithItems = salesData.map((s, idx) => ({ ...s, items: itemsArrays[idx].docs.map((d) => d.data()) }))
+    // New sales carry a compact copy of their items (items_summary), so no extra reads are
+    // needed. Older sales are read once, in small groups, and upgraded for next time.
+    const missing = salesData.filter((s) => !Array.isArray(s.items_summary))
+    const legacy = missing.length ? await loadLegacyItems(missing) : new Map()
+    if (legacy.size) saveSummaries(legacy) // runs in the background
+    salesWithItems = salesData.map((s) => ({ ...s, items: Array.isArray(s.items_summary) ? s.items_summary : (legacy.get(s.id) || []) }))
     saleItems = salesWithItems.flatMap((s) => s.items)
     cogs = saleItems.reduce((sum, i) => sum + Number(i.cost_price) * Number(i.qty), 0)
   }
@@ -143,6 +180,9 @@ const ChartTip = ({ active, payload, label, currency }) => {
 
 export default function Reports() {
   const { company } = useSettings()
+  const { profile } = useAuth()
+  // Owner/admin see everything. Managers don't see profit, cost, cash flow or balance sheet.
+  const isOwner = isOwnerRole(profile?.role) || profile?.role === 'super_admin'
   const [preset, setPreset] = useState('month')
   const [customStart, setCustomStart] = useState('')
   const [customEnd, setCustomEnd] = useState('')
@@ -344,13 +384,13 @@ export default function Reports() {
           </div>
 
           <div className="mt-6">
-            <p className="text-sm text-white/80">Net Profit</p>
+            <p className="text-sm text-white/80">{isOwner ? 'Net Profit' : 'Total Revenue'}</p>
             {loading ? <div className="h-10 w-56 rounded-lg bg-white/20 animate-pulse mt-1" /> : (
-              <p className="text-3xl sm:text-5xl font-black tracking-tight"><AnimatedMoney value={netProfit} currency={cur} /></p>
+              <p className="text-3xl sm:text-5xl font-black tracking-tight"><AnimatedMoney value={isOwner ? netProfit : (current?.revenue || 0)} currency={cur} /></p>
             )}
             <div className="flex flex-wrap items-center gap-2 mt-1">
-              <ChangeBadge value={profitChange} light />
-              {margin !== null && isFinite(margin) && <span className="inline-flex mt-1 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-white/20">{margin.toFixed(0)}% margin</span>}
+              <ChangeBadge value={isOwner ? profitChange : revenueChange} light />
+              {isOwner && margin !== null && isFinite(margin) && <span className="inline-flex mt-1 px-1.5 py-0.5 rounded-full text-[11px] font-semibold bg-white/20">{margin.toFixed(0)}% margin</span>}
             </div>
           </div>
         </div>
@@ -358,12 +398,20 @@ export default function Reports() {
 
       <div className="max-w-6xl mx-auto px-4 lg:px-6 -mt-12 space-y-4">
         {/* KPI CARDS */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {isOwner ? (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Kpi label="Revenue" icon={DollarSign} gradient="from-blue-500 to-indigo-600" sub={<ChangeBadge value={revenueChange} />}>{formatMoney(current?.revenue || 0, cur)}</Kpi>
           <Kpi label="Gross Profit" icon={TrendingUp} gradient="from-emerald-500 to-teal-600">{formatMoney(current?.grossProfit || 0, cur)}</Kpi>
           <Kpi label="Net Cash Flow" icon={Wallet} gradient={netCashFlow >= 0 ? 'from-cyan-500 to-blue-600' : 'from-rose-500 to-red-600'}>{formatMoney(netCashFlow, cur)}</Kpi>
           <Kpi label="Stock Valuation" icon={Package} gradient="from-purple-500 to-fuchsia-600">{formatMoney(stockValuation, cur)}</Kpi>
-        </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-3 gap-3">
+            <Kpi label="Revenue" icon={DollarSign} gradient="from-blue-500 to-indigo-600" sub={<ChangeBadge value={revenueChange} />}>{formatMoney(current?.revenue || 0, cur)}</Kpi>
+            <Kpi label="Sales Made" icon={TrendingUp} gradient="from-emerald-500 to-teal-600">{dailyBreakdown.reduce((n, d) => n + d.transactions, 0)}</Kpi>
+            <Kpi label="Items Sold" icon={Package} gradient="from-purple-500 to-fuchsia-600">{dailyBreakdown.reduce((n, d) => n + d.items, 0)}</Kpi>
+          </div>
+        )}
 
         {/* RECORDS */}
         <div className="grid sm:grid-cols-3 gap-3">
@@ -398,6 +446,7 @@ export default function Reports() {
           )}
         </Panel>
 
+        {isOwner && (<>
         {/* MONEY IN / OUT + P&L */}
         <div className="grid lg:grid-cols-2 gap-4">
           <Panel title="Where the money went" icon={Wallet} tone="text-cyan-500"
@@ -420,6 +469,7 @@ export default function Reports() {
             </div>
           </Panel>
         </div>
+        </>)}
 
         {/* LEADERBOARDS */}
         <div className="grid lg:grid-cols-2 gap-4">
@@ -523,6 +573,7 @@ export default function Reports() {
         </Panel>
 
         {/* BALANCE SHEET */}
+        {isOwner && (
         <Panel title="Balance Sheet · snapshot as of today" icon={Scale} tone="text-gray-400">
           <div className="grid sm:grid-cols-3 gap-3">
             <div className="rounded-xl p-4 bg-emerald-50 dark:bg-emerald-900/20">
@@ -542,6 +593,7 @@ export default function Reports() {
           </div>
           <p className="text-xs text-gray-400 mt-3">Simplified for a single-shop operation — doesn't track cash-on-hand/bank balances separately (see the Cash &amp; Bank page for that).</p>
         </Panel>
+        )}
       </div>
     </div>
   )
