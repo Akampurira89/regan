@@ -5,8 +5,7 @@ import { auth } from '../lib/firebase'
 import { Card, Button, Modal, Input } from './ui/ui'
 import { useAuth } from '../context/AuthContext'
 import { logAudit } from '../utils/helpers'
-import { RESET_COLLECTIONS, buildBackup, wipeShopData } from '../lib/resetShop'
-
+import { RESET_COLLECTIONS, buildBackup, wipeShopData } from "../lib/firestoreServ
 const KEEP = ['Staff accounts and roles', 'Settings and receipt template', 'Categories', 'Audit log']
 
 // "Start fresh" for the shop OWNER only. Three locks: (1) a safety-copy file must be
