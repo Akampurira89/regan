@@ -54,11 +54,12 @@ export default function TenantDetail() {
     load()
   }, [tenantId])
 
-  // Gives an existing shop's main account the Owner role (needed for the "start fresh" reset)
-  const makeOwner = async (u) => {
-    if (!confirm(`Make ${u.full_name || 'this person'} the Owner of this shop?`)) return
-    await updateDoc(doc(db, 'tenants', tenantId, 'profiles', u.id), { role: 'owner' })
-    setStaff((list) => list.map((x) => (x.id === u.id ? { ...x, role: 'owner' } : x)))
+  // Super admin can set any staff account's role (e.g. promote the main account to Owner)
+  const changeRole = async (u, role) => {
+    if (role === u.role) return
+    if (!confirm(`Change ${u.full_name || 'this account'} from ${u.role} to ${role}?`)) return
+    await updateDoc(doc(db, 'tenants', tenantId, 'profiles', u.id), { role })
+    setStaff((list) => list.map((x) => (x.id === u.id ? { ...x, role } : x)))
   }
 
   const openFullDashboard = () => {
@@ -113,10 +114,10 @@ export default function TenantDetail() {
           <div className="divide-y divide-gray-100 dark:divide-gray-800">
             {staff.map((u) => (
               <div key={u.id} className="flex justify-between items-center py-2 text-sm">
-                <span className="text-gray-800 dark:text-gray-100">{u.full_name || u.id} <span className="text-xs text-gray-400 capitalize">· {u.role}</span></span>
-                {u.role === 'admin' && !staff.some((x) => x.role === 'owner') && (
-                  <button onClick={() => makeOwner(u)} className="text-xs font-medium text-amber-600 hover:underline">Make owner</button>
-                )}
+                <span className="text-gray-800 dark:text-gray-100">{u.full_name || u.id} <span className="block text-xs text-gray-400">{u.email || ''}</span></span>
+                <select value={u.role} onChange={(e) => changeRole(u, e.target.value)} className="text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-700 dark:bg-gray-800 capitalize">
+                  {['owner', 'admin', 'manager', 'cashier', 'technician'].map((r) => <option key={r} value={r}>{r}</option>)}
+                </select>
               </div>
             ))}
           </div>
