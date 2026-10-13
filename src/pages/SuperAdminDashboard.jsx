@@ -4,7 +4,7 @@ import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc, Timestamp } fro
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth'
 import { auth, db, secondaryAuth } from '../lib/firebase'
 import { useAuth } from '../context/AuthContext'
-import { Store, CheckCircle2, XCircle, Search, Plus, LogOut, Sparkles, Pencil, Trash2, ExternalLink, Clock } from 'lucide-react'
+import { Store, CheckCircle2, XCircle, Search, Plus, LogOut, Sparkles, Pencil, Trash2, ExternalLink, Clock, Bug } from 'lucide-react'
 
 const TRIAL_DAYS = 30
 const MONTHLY_FEE = 50000
@@ -167,9 +167,9 @@ export default function SuperAdminDashboard() {
         plan: addForm.plan,
         createdAt: new Date(),
       })
-      await setDoc(doc(db, 'userTenants', newUid), { tenantId, role: 'admin' })
+      await setDoc(doc(db, 'userTenants', newUid), { tenantId, role: 'owner' })
       await setDoc(doc(db, 'tenants', tenantId, 'profiles', newUid), {
-        full_name: addForm.ownerName, role: 'admin', is_active: true,
+        full_name: addForm.ownerName, role: 'owner', is_active: true,
       })
 
       setAddOpen(false)
@@ -248,9 +248,14 @@ export default function SuperAdminDashboard() {
             <h1 className="text-2xl font-bold text-white">Manage Clients</h1>
             <p className="text-sm text-white/70 mt-0.5">Every shop running on your platform &middot; UGX {MONTHLY_FEE.toLocaleString()}/month after a {TRIAL_DAYS}-day free trial</p>
           </div>
-          <button onClick={logout} className="flex items-center gap-1.5 text-sm text-white/90 hover:text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors">
-            <LogOut size={14} /> Log out
-          </button>
+          <div className="flex items-center gap-2">
+            <Link to="/admin/errors" className="flex items-center gap-1.5 text-sm text-white/90 hover:text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors">
+              <Bug size={14} /> Errors
+            </Link>
+            <button onClick={logout} className="flex items-center gap-1.5 text-sm text-white/90 hover:text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg transition-colors">
+              <LogOut size={14} /> Log out
+            </button>
+          </div>
         </div>
       </div>
 
