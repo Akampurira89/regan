@@ -3,17 +3,28 @@ import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebas
 import { doc, getDoc, addDoc, collection, serverTimestamp, onSnapshot } from 'firebase/firestore'
 import { auth, db, tPath, setTenantId, TENANT_ID } from '../lib/firebase'
 
+import { setErrorContext } from '../lib/errorLogger'
+
 const AuthContext = createContext(null)
 
 export const ROLE_PERMISSIONS = {
+  // Owner: created automatically with every new shop. Sees and does everything.
+  owner: ['*'],
+  // Admin: full access too (kept so existing shops keep working).
   admin: ['*'],
+  // Manager: runs the day-to-day shop. NO cash & bank, settings, receipt
+  // template, audit log, backup/export or staff/roles pages, and the Reports
+  // page hides profit, cost, cash-flow and balance-sheet figures.
   manager: [
     'dashboard', 'products', 'sales', 'purchases', 'customers', 'suppliers',
-    'debts', 'reports', 'settings', 'audit', 'backup', 'consignment', 'cashbank',
+    'debts', 'consignment', 'reports',
   ],
   cashier: ['dashboard', 'sales', 'customers', 'debts', 'consignment'],
   technician: ['dashboard'],
 }
+
+// Owner and admin have full access (and are the only roles that manage staff/roles).
+export const isOwnerRole = (role) => role === 'owner' || role === 'admin'
 
 // Mirrors the exact same logic enforced server-side in firestore.rules
 // (tenantIsPaidUp). This copy exists ONLY to show a clear, friendly message —
@@ -161,6 +172,10 @@ export function AuthProvider({ children }) {
   }
 
   const activeTenantId = profile?.role === 'super_admin' ? (viewingAs?.tenantId || null) : (profile?.tenantId || null)
+
+  useEffect(() => {
+    setErrorContext({ userId: user?.uid || null, role: profile?.role || null, tenantId: activeTenantId || null })
+  }, [user, profile, activeTenantId])
 
   const can = (pageKey) => {
     if (profile?.role === 'super_admin') {
