@@ -4,13 +4,13 @@ import { collection, getDocs, doc, deleteDoc, runTransaction, serverTimestamp } 
 import { db, tPath } from '../lib/firebase'
 import { Button, Card, Input, Select, Modal, EmptyState, Badge } from '../components/ui/ui'
 import { formatMoney, formatDate, logAudit } from '../utils/helpers'
-import { useAuth } from '../context/AuthContext'
+import { useAuth, isOwnerRole } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 
 export default function Purchases() {
   const { profile } = useAuth()
   const { company } = useSettings()
-  const isAdmin = profile?.role === 'admin'
+  const isAdmin = isOwnerRole(profile?.role)
   const [purchases, setPurchases] = useState([])
   const [suppliers, setSuppliers] = useState([])
   const [products, setProducts] = useState([])
