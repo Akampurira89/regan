@@ -120,6 +120,8 @@ export default function Sales() {
         amount_paid: paid, balance_due: balanceDue, payment_method: paymentMethod,
         is_credit_sale: isCredit && balanceDue > 0, status: 'completed', notes,
         created_at: serverTimestamp(),
+        // Compact copy of the items so Reports doesn't have to read each sale's items separately
+        items_summary: cart.map((i) => ({ product_id: i.product.id, product_name: i.product.name, qty: i.qty, rate: i.rate, amount: i.rate * i.qty, cost_price: i.product.buying_price ?? 0 })),
       }
 
       const saleRef = doc(collection(db, ...tPath('sales')))
