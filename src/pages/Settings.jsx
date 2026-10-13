@@ -1,21 +1,37 @@
-import { useEffect, useState } from 'react'
-import { Plus, UserMinus, Wallet, History } from 'lucide-react'
-import { collection, getDocs, addDoc, updateDoc, doc, runTransaction, serverTimestamp, query, where } from 'firebase/firestore'
+import { useEffect, useRef, useState } from 'react'
+import { Plus, UserMinus, Wallet, History, Trash2 } from 'lucide-react'
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, runTransaction, serverTimestamp, query, where } from 'firebase/firestore'
 import { db, tPath } from '../lib/firebase'
 import { Card, Input, Select, Checkbox, Button, Modal, EmptyState, Badge, Textarea } from '../components/ui/ui'
 import { useSettings } from '../context/SettingsContext'
 import { formatMoney, formatDate, logAudit } from '../utils/helpers'
-import { useAuth } from '../context/AuthContext'
+import { useAuth, isOwnerRole } from '../context/AuthContext'
+import ResetShopCard from '../components/ResetShopCard'
+
+// Today's date on THIS device (not UTC, which is wrong between midnight and 3am in Uganda)
+const todayLocal = () => {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 export default function Settings() {
   const { profile } = useAuth()
+  // Blocks double/triple taps: the ref flips instantly, state would not
+  const busy = useRef(false)
+  const once = (fn) => async (...args) => {
+    args[0]?.preventDefault?.()
+    if (busy.current) return
+    busy.current = true
+    try { await fn(...args) } finally { busy.current = false }
+  }
+  const canDeleteExpense = isOwnerRole(profile?.role)
   const { company, saveCompany } = useSettings()
   const [form, setForm] = useState(company)
   const [saving, setSaving] = useState(false)
   const [expenses, setExpenses] = useState([])
   const [expenseCategories, setExpenseCategories] = useState([])
   const [expModal, setExpModal] = useState(false)
-  const [expForm, setExpForm] = useState({ category_id: '', amount: '', description: '', expense_date: new Date().toISOString().slice(0, 10) })
+  const [expForm, setExpForm] = useState({ category_id: '', amount: '', description: '', expense_date: todayLocal() })
   const [payables, setPayables] = useState([])
   const [payableModalOpen, setPayableModalOpen] = useState(false)
   const [payableForm, setPayableForm] = useState({ person_name: '', phone: '', amount: '', reason: '' })
@@ -36,7 +52,7 @@ export default function Settings() {
   }
   useEffect(() => { loadPayables() }, [])
 
-  const addPayable = async (e) => {
+  const addPayable = once(async (e) => {
     e.preventDefault()
     const amount = Number(payableForm.amount)
     if (!amount) return
@@ -45,9 +61,9 @@ export default function Settings() {
     await logAudit({ userId: profile?.id, action: 'create', entityType: 'personalPayables', entityId: ref.id, newValues: payload })
     setPayableModalOpen(false); setPayableForm({ person_name: '', phone: '', amount: '', reason: '' })
     loadPayables()
-  }
+  })
 
-  const recordPayablePayment = async (e) => {
+  const recordPayablePayment = once(async (e) => {
     e.preventDefault()
     const amount = Number(payAmount)
     if (!amount || amount <= 0) return
@@ -67,7 +83,7 @@ export default function Settings() {
     } catch (err) {
       alert('Could not record payment: ' + err.message)
     }
-  }
+  })
 
   useEffect(() => { setForm(company) }, [company])
 
@@ -85,14 +101,26 @@ export default function Settings() {
     try { await saveCompany(form) } finally { setSaving(false) }
   }
 
-  const saveExpense = async (e) => {
-    e.preventDefault()
-    const ref = await addDoc(collection(db, ...tPath('expenses')), { ...expForm, amount: Number(expForm.amount), paid_by: profile?.id, created_at: serverTimestamp() })
-    await logAudit({ userId: profile?.id, action: 'create', entityType: 'expenses', entityId: ref.id, newValues: expForm })
-    setExpModal(false)
-    setExpForm({ category_id: '', amount: '', description: '', expense_date: new Date().toISOString().slice(0, 10) })
+  const removeExpense = once(async (exp) => {
+    if (!canDeleteExpense) return
+    if (!confirm(`Delete this expense (${exp.categoryName || 'expense'} - ${formatMoney(exp.amount, company.currency)})? This cannot be undone.`)) return
+    await deleteDoc(doc(db, ...tPath('expenses', exp.id)))
+    await logAudit({ userId: profile?.id, action: 'delete', entityType: 'expenses', entityId: exp.id, oldValues: { amount: exp.amount, category_id: exp.category_id, description: exp.description, expense_date: exp.expense_date } })
     loadExpenses()
-  }
+  })
+
+  const saveExpense = once(async (e) => {
+    e.preventDefault()
+    const amount = Number(expForm.amount)
+    if (!(amount > 0)) return
+    // Expenses can only be recorded for TODAY — the date is always set here, whatever the form shows
+    const record = { ...expForm, amount, expense_date: todayLocal() }
+    const ref = await addDoc(collection(db, ...tPath('expenses')), { ...record, paid_by: profile?.id, created_at: serverTimestamp() })
+    await logAudit({ userId: profile?.id, action: 'create', entityType: 'expenses', entityId: ref.id, newValues: record })
+    setExpModal(false)
+    setExpForm({ category_id: '', amount: '', description: '', expense_date: todayLocal() })
+    loadExpenses()
+  })
 
   return (
     <div className="space-y-4">
@@ -146,7 +174,12 @@ export default function Settings() {
                     <p className="font-medium">{e.categoryName}</p>
                     <p className="text-xs text-gray-400">{e.description} · {formatDate(e.expense_date)}</p>
                   </div>
-                  <span className="font-semibold text-red-600">-{formatMoney(e.amount, company.currency)}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-red-600">-{formatMoney(e.amount, company.currency)}</span>
+                    {canDeleteExpense && (
+                      <button onClick={() => removeExpense(e)} title="Delete this expense" className="p-1.5 rounded hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600"><Trash2 size={14} /></button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -175,6 +208,8 @@ export default function Settings() {
         </Card>
       </div>
 
+      {profile?.role === 'owner' && <ResetShopCard />}
+
       <Modal open={expModal} onClose={() => setExpModal(false)} title="Add Expense">
         <form onSubmit={saveExpense}>
           <Select label="Category *" required value={expForm.category_id} onChange={(e) => setExpForm({ ...expForm, category_id: e.target.value })}>
@@ -183,7 +218,7 @@ export default function Settings() {
           </Select>
           <Input label="Amount *" type="number" required value={expForm.amount} onChange={(e) => setExpForm({ ...expForm, amount: e.target.value })} />
           <Input label="Description" value={expForm.description} onChange={(e) => setExpForm({ ...expForm, description: e.target.value })} />
-          <Input label="Date" type="date" value={expForm.expense_date} onChange={(e) => setExpForm({ ...expForm, expense_date: e.target.value })} />
+          <Input label="Date (today only)" type="date" value={todayLocal()} readOnly min={todayLocal()} max={todayLocal()} />
           <div className="flex justify-end gap-2 mt-2">
             <Button type="button" variant="secondary" onClick={() => setExpModal(false)}>Cancel</Button>
             <Button type="submit">Save Expense</Button>
