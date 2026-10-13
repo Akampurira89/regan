@@ -6,7 +6,7 @@ import { startOfDay, startOfWeek, startOfMonth } from 'date-fns'
 import { Card, Button, Input, Modal, EmptyState, Badge } from '../../components/ui/ui'
 import { formatMoney, formatDate, logAudit } from '../../utils/helpers'
 import { useSettings } from '../../context/SettingsContext'
-import { useAuth } from '../../context/AuthContext'
+import { useAuth, isOwnerRole } from '../../context/AuthContext'
 import ReceiptView from './ReceiptView'
 
 const PERIODS = [
@@ -27,7 +27,7 @@ function periodCutoff(period) {
 export default function ReceiptHistory() {
   const { company, template } = useSettings()
   const { profile } = useAuth()
-  const isAdmin = profile?.role === 'admin'
+  const isAdmin = isOwnerRole(profile?.role)
   const [sales, setSales] = useState([])
   const [consignSales, setConsignSales] = useState([])
   const [search, setSearch] = useState('')
@@ -172,6 +172,7 @@ export default function ReceiptHistory() {
           subtotal: editItems.reduce((s, i) => s + Number(i.rate) * Number(i.qty), 0),
           discount: Number(editDiscount) || 0, total: newTotal, amount_paid: paid, balance_due: newBalanceDue,
           is_credit_sale: newBalanceDue > 0,
+          items_summary: editItems.map((i) => ({ product_id: i.product_id || null, product_name: i.product_name || '', qty: Number(i.qty), rate: Number(i.rate), amount: Number(i.qty) * Number(i.rate), cost_price: Number(i.cost_price) || 0 })),
         })
       })
 
