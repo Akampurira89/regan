@@ -24,7 +24,7 @@ const ReceiptSettings = lazy(() => import('./pages/receipts/ReceiptSettings'))
 const ReceiptHistory = lazy(() => import('./pages/receipts/ReceiptHistory'))
 const SuperAdminDashboard = lazy(() => import('./pages/SuperAdminDashboard'))
 const TenantDetail = lazy(() => import('./pages/TenantDetail'))
-const ErrorReports = lazy(() => import('./pages/ErrorReports'))
+const ErrorReports = lazy(() => import("./pages/ErrorReports"));
 
 function SuperAdminRoute({ children }) {
   const { session, profile, loading } = useAuth()
