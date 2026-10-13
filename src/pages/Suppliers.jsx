@@ -6,14 +6,14 @@ import { db, tPath } from '../lib/firebase'
 import { Button, Card, Input, Textarea, Modal, EmptyState, Badge } from '../components/ui/ui'
 import { formatMoney, formatDate, logAudit } from '../utils/helpers'
 import { allocatePaymentsFIFO, allocateToPurchases } from '../utils/allocation'
-import { useAuth } from '../context/AuthContext'
+import { useAuth, isOwnerRole } from '../context/AuthContext'
 import { useSettings } from '../context/SettingsContext'
 
 const empty = { name: '', contact_person: '', phone: '', email: '', address: '', notes: '', balance_owed: 0 }
 
 export default function Suppliers() {
   const { profile } = useAuth()
-  const isAdmin = profile?.role === 'admin'
+  const isAdmin = isOwnerRole(profile?.role)
   const [reconciling, setReconciling] = useState(false)
   const { company } = useSettings()
   const [suppliers, setSuppliers] = useState([])
